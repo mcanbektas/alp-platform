@@ -1,0 +1,21 @@
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "ConnectionStrings": {
+    "Default": "Host=localhost;Database=alp_pcb_toolkit;Username=postgres;Password=postgres"
+  },
+  "Jwt": {
+    "Key": "openssl rand -base64 48 ile üretilmiş, en az 32 baytlık rastgele anahtar",
+    "Issuer": "alp-pcb-toolkit-dev",
+    "Audience": "alp-pcb-toolkit-dev",
+    "AccessTokenMinutes": 15,
+    "RefreshTokenDays": 30
+  },
+  "App": {
+    "FrontendBaseUrl": "http://localhost:3000"
+  }
+}

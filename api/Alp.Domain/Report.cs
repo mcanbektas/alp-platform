@@ -1,0 +1,28 @@
+namespace Alp.Domain;
+
+public enum ReportFormat
+{
+    Pdf,
+    Xlsx,
+}
+
+public class Report
+{
+    public Guid Id { get; set; }
+
+    // Rapor bir projeye kaydedilmeden de üretilebilir — "rapor al" ve
+    // "projeye kaydet" bilinçli olarak ayrı yeteneklerdir (bkz.
+    // docs/uyelik-ve-rapor-plani.md §1). Proje seçilmişse ilişki kurulur.
+    public Guid? ProjectId { get; set; }
+    public Project? Project { get; set; }
+    public string UserId { get; set; } = string.Empty;
+
+    public string Title { get; set; } = string.Empty;
+    public string PreparedBy { get; set; } = string.Empty;
+    public int Revision { get; set; } = 1;
+    public ReportFormat Format { get; set; }
+
+    public string FilePath { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public DateTimeOffset GeneratedAt { get; set; }
+}
