@@ -1,0 +1,58 @@
+# Üretim örtüsü — docker-compose.yml'in ÜSTÜNE binier, tek başına çalışmaz.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
+#
+# `--no-build` şart: temel dosyadaki `build:` anahtarı burada kaldırılamaz
+# (Compose birleştirmede anahtar silinemez), o yüzden derleme açıkça kapatılır.
+# Amaç sunucunun derleme yapmaması — .NET derlemesi küçük bir VPS'i tüketir.
+#
+# Gerekli ek ortam değişkenleri (.env): APP_DOMAIN, IMAGE_TAG, IMAGE_PREFIX.
+
+services:
+  api:
+    image: ${IMAGE_PREFIX}/api:${IMAGE_TAG:-latest}
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      # Aynı köken üzerinden servis edildiği için CORS fiilen devrede değil;
+      # yine de doğru alan adı verilir — doğrulama/parola bağlantıları da
+      # bu değerden üretilir (AuthEndpoints.FrontendBaseUrl).
+      App__FrontendBaseUrl: https://${APP_DOMAIN}
+
+  web:
+    image: ${IMAGE_PREFIX}/web:${IMAGE_TAG:-latest}
+    environment:
+      # nginx imajının giriş noktası templates/ altını envsubst'tan geçirip
+      # conf.d/default.conf olarak yazar — imaja gömülü TLS'siz varsayılanın
+      # üstüne biner.
+      APP_DOMAIN: ${APP_DOMAIN}
+    ports:
+      # Compose port listelerini BİRLEŞTİRİR, üzerine yazmaz. Bu yüzden burada
+      # 80 tekrar yazılmaz: temel dosyadaki ${WEB_PORT} .env'de 80 yapılır.
+      # Yazılsaydı hem "80:80" hem "8080:80" açık kalır ve 8080, TLS
+      # yönlendirmesini atlayan ikinci bir düz HTTP kapısı olurdu.
+      - "443:443"
+    volumes:
+      - ./nginx.prod.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - certbot-conf:/etc/letsencrypt:ro
+      - certbot-webroot:/var/www/certbot:ro
+
+  # Sertifika yenileme. İlk sertifika ELLE alınır (deploy/README.md), bu servis
+  # yalnızca yenilemeyi sürdürür: certbot yenileme yaptığında nginx'in yeni
+  # dosyayı okuması için yeniden yüklenmesi gerekir — aşağıdaki döngü 12 saatte
+  # bir dener, nginx ayrı bir zamanlayıcıyla yeniden yüklenir (README).
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - certbot-conf:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    entrypoint: >
+      sh -c "trap exit TERM;
+      while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+    networks:
+      - alpnet
+
+volumes:
+  certbot-conf:
+  certbot-webroot:

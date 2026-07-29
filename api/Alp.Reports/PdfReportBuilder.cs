@@ -8,7 +8,14 @@ namespace Alp.Reports;
 // docs/uyelik-ve-rapor-plani.md §5.3 + §12 (Faz 1 risk denemesi). Düzen ve
 // renk kararları orada uçtan uca doğrulandı; bu, aynı kalıbın gerçek
 // ReportPayload üzerinde çalışan hâli.
-public class PdfReportBuilder(byte[] logoPng)
+/// <param name="logoPng">Rapor başlığındaki logo.</param>
+/// <param name="onSvgError">
+/// Bir SVG çözülemediğinde çağrılır (bozuk parçanın başı verilir). Boş
+/// bırakılabilir. Amaç: atlanan çizim SESSİZ kalmasın — belgede yerine not
+/// basılıyor ama sunucu günlüğünde de iz kalmalı, yoksa raporlar zamanla
+/// çizimsiz çıkar ve kimse fark etmez.
+/// </param>
+public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
 {
     // solder-light.css paleti — rapor sitenin kendi renklerini kullanır,
     // ayrı bir "kâğıt paleti" yok (§5.1.1 kararı).
@@ -95,7 +102,9 @@ public class PdfReportBuilder(byte[] logoPng)
         }).GeneratePdf();
     }
 
-    private static void Section(
+    // Statik DEĞİL: SVG çözülemediğinde örnek üzerindeki `onSvgError` geri
+    // çağrısına ulaşması gerekiyor.
+    private void Section(
         IContainer container, int no, ReportSection section,
         Color green, Color ink, Color muted, Color rule, Color raised)
     {
@@ -122,11 +131,24 @@ public class PdfReportBuilder(byte[] logoPng)
             {
                 col.Item().PaddingTop(12).ShowEntire().Column(fig =>
                 {
-                    fig.Item().AlignCenter().Width(210).Svg(section.SchematicSvg);
-                    if (!string.IsNullOrWhiteSpace(section.SchematicCaption))
+                    // Çözülemeyen bir SVG BÜTÜN raporu düşürmemeli. QuestPDF
+                    // burada istisna fırlatıyor ve daha önce tek bir bozuk
+                    // öznitelik yüzünden PDF hiç üretilemiyordu — kullanıcı
+                    // "Sunucudan beklenmeyen bir yanıt geldi" görüyordu.
+                    // Şema atlanır, belge kalan bölümlerle üretilir; eksik
+                    // olduğu da SESSİZ geçilmez, yerine not yazılır.
+                    if (TryRenderSvg(fig, section.SchematicSvg, "şema", full: false))
                     {
-                        fig.Item().PaddingTop(3).AlignCenter()
-                            .Text(section.SchematicCaption).FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
+                        if (!string.IsNullOrWhiteSpace(section.SchematicCaption))
+                        {
+                            fig.Item().PaddingTop(3).AlignCenter()
+                                .Text(section.SchematicCaption).FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
+                        }
+                    }
+                    else
+                    {
+                        fig.Item().AlignCenter().Text("Şema bu raporda gösterilemedi.")
+                            .FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
                     }
                 });
             }
@@ -157,11 +179,20 @@ public class PdfReportBuilder(byte[] logoPng)
             {
                 col.Item().PaddingTop(12).ShowEntire().Column(fig =>
                 {
-                    fig.Item().Svg(section.Chart.Svg);
-                    if (!string.IsNullOrWhiteSpace(section.Chart.Title))
+                    // Şemayla aynı gerekçe: çözülemeyen bir grafik BÜTÜN raporu
+                    // düşürmemeli (bkz. TryRenderSvg).
+                    if (TryRenderSvg(fig, section.Chart.Svg, "grafik", full: true))
                     {
-                        fig.Item().PaddingTop(3).AlignCenter()
-                            .Text(section.Chart.Title).FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
+                        if (!string.IsNullOrWhiteSpace(section.Chart.Title))
+                        {
+                            fig.Item().PaddingTop(3).AlignCenter()
+                                .Text(section.Chart.Title).FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
+                        }
+                    }
+                    else
+                    {
+                        fig.Item().AlignCenter().Text("Grafik bu raporda gösterilemedi.")
+                            .FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
                     }
                 });
             }
@@ -214,6 +245,36 @@ public class PdfReportBuilder(byte[] logoPng)
 
     private static IContainer Cell(IContainer c, Color rule) =>
         c.BorderBottom(0.6f).BorderColor(rule).PaddingVertical(3.5f).PaddingHorizontal(6);
+
+    /// <summary>
+    /// SVG'yi yerleştirmeyi dener; çözülemezse <c>false</c> döner ve belgeye
+    /// hiçbir şey eklemez.
+    /// </summary>
+    /// <remarks>
+    /// Geniş <c>catch</c> bilinçli: QuestPDF çözümleme hatasını düz
+    /// <c>System.Exception</c> olarak fırlatıyor, yakalanacak dar bir tür yok.
+    /// Buradaki tek amaç bir bölümün çizimi yüzünden BÜTÜN raporun
+    /// üretilememesini engellemek — hata yutulmuyor, çağıran yerine not basıyor.
+    /// </remarks>
+    private bool TryRenderSvg(ColumnDescriptor fig, string svg, string kind, bool full)
+    {
+        try
+        {
+            if (full) fig.Item().Svg(svg);
+            else fig.Item().AlignCenter().Width(210).Svg(svg);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // Teşhis için bozuk parçanın BAŞI da verilir: hata mesajı
+            // ("Cannot decode the provided SVG image.") hangi özniteliğin
+            // bozulduğunu söylemiyor, dizeyi görmeden neden bulunamıyor.
+            onSvgError?.Invoke(
+                $"{kind} SVG'si çözülemedi: {ex.Message} | ilk 600 karakter: "
+                + svg[..Math.Min(600, svg.Length)]);
+            return false;
+        }
+    }
 }
 
 public static class ReportFonts
@@ -221,13 +282,20 @@ public static class ReportFonts
     // Faz 3b tamamlanınca web/public/fonts/ altındaki dosyalar aynı
     // dizinden PDF'e de gömülecek — tek kaynak. O ana kadar dizin yoksa
     // sessizce atlanır, QuestPDF platform yazı tipine düşer.
-    public static void RegisterIfAvailable(string fontsDirectory)
+    /// <returns>Kaydedilen yazı tipi dosyası sayısı — sıfır, platform yazı tipine
+    /// düşüleceği anlamına gelir. Çağıran bunu üretimde uyarı olarak basar:
+    /// konteyner tabanı Debian'da sistem yazı tipi yoktur, sessizce düşülürse
+    /// PDF'te yazılar kaybolur.</returns>
+    public static int RegisterIfAvailable(string fontsDirectory)
     {
-        if (!Directory.Exists(fontsDirectory)) return;
+        if (!Directory.Exists(fontsDirectory)) return 0;
+        var count = 0;
         foreach (var file in Directory.EnumerateFiles(fontsDirectory, "*.ttf"))
         {
             using var stream = File.OpenRead(file);
             FontManager.RegisterFont(stream);
+            count++;
         }
+        return count;
     }
 }

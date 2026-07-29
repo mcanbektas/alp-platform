@@ -12,6 +12,13 @@ namespace Alp.Api.Auth;
 public static class AuthEndpoints
 {
     private const string RefreshCookieName = "alp_rt";
+
+    // Döndürülmüş bir yenileme token'ının tekrar sunulması bu süre içinde
+    // YARIŞ sayılır, hırsızlık değil (bkz. Refresh). Sekme yarışı saniyeler
+    // içinde olur; çalıntı bir token'ın tekrar oynatılması genelde çok
+    // sonra gelir. Pencere darsa meşru yarış hâlâ oturumdan atar, genişse
+    // çalıntı token daha uzun süre kullanılabilir.
+    private static readonly TimeSpan RotationGrace = TimeSpan.FromSeconds(30);
     private const string RefreshCookiePath = "/api/auth";
 
     // Küçük JSON gövdeli uçlar (e-posta/parola) için üst sınır — rate sınırı
@@ -139,7 +146,7 @@ public static class AuthEndpoints
             return Results.Json(new ApiError("EMAIL_NOT_CONFIRMED"), statusCode: StatusCodes.Status403Forbidden);
         }
 
-        return await IssueSession(user, tokenService, db, http, env);
+        return await IssueSession(user, tokenService, db, http, env, req.RememberMe);
     }
 
     private static async Task<IResult> Refresh(
@@ -166,12 +173,27 @@ public static class AuthEndpoints
 
         if (existing.RevokedAt is not null)
         {
-            // Zaten döndürülmüş bir token tekrar sunuldu — eşzamanlı çift
-            // istek ya da çalıntı token'ın tekrar oynatılması. İkisi de aynı
-            // tepkiyi hak eder: bu zincirden türeyen her token iptal edilir,
-            // istemci yeniden giriş yapmak zorunda kalır.
-            await RevokeDescendantChain(db, existing, now);
-            ClearRefreshCookie(http);
+            // Zaten döndürülmüş bir token tekrar sunuldu. Bu HER ZAMAN
+            // hırsızlık değildir: iki sekme aynı anda açıldığında ikisi de
+            // aynı çerezle yenilemeye gelir ve biri kaçınılmaz olarak
+            // döndürülmüş token'ı sunar.
+            //
+            // Ölçüldü: ayrım yapılmadığında iki eşzamanlı yenileme meşru
+            // kullanıcıyı HER SEKMEDE oturumdan atıyordu — kaybeden istek
+            // zinciri iptal ediyor, kazananın az önce aldığı yepyeni token da
+            // ölüyordu.
+            //
+            // Ayrım zamanla yapılır: döndürmenin hemen ardından gelen tekrar
+            // yarıştır, günler sonra gelen tekrar çalıntıdır. Pencere dar
+            // tutulur — çalınan bir token'ın kullanılabildiği süre bu kadardır.
+            if (now - existing.RevokedAt.Value > RotationGrace)
+            {
+                await RevokeDescendantChain(db, existing, now);
+                ClearRefreshCookie(http);
+            }
+            // Pencere içindeyse ÇEREZ SİLİNMEZ. Çerez sekmeler arasında
+            // ortaktır; silmek, işini doğru yapan öteki sekmenin oturumunu da
+            // götürürdü. Bu istek başarısız olur, istemci yeniden dener.
             return Results.Json(new ApiError("INVALID_REFRESH_TOKEN"), statusCode: StatusCodes.Status401Unauthorized);
         }
 
@@ -204,7 +226,10 @@ public static class AuthEndpoints
             // kullanıcıyı da oturumdan atardı. Gerçek çalıntı-tekrar senaryosu
             // zaten yukarıdaki `existing.RevokedAt is not null` dalında
             // yakalanıyor — orada token AYRI, SONRAKİ bir istekte sunuluyor.
-            ClearRefreshCookie(http);
+            //
+            // Çerez de SİLİNMEZ: yarışı kazanan istek geçerli bir token yazdı,
+            // çerez sekmeler arasında ortak. Buradan silmek kazananın oturumunu
+            // da götürürdü — asıl arıza buydu.
             return Results.Json(new ApiError("INVALID_REFRESH_TOKEN"), statusCode: StatusCodes.Status401Unauthorized);
         }
 
@@ -216,11 +241,14 @@ public static class AuthEndpoints
             ExpiresAt = now.Add(tokenService.RefreshTokenLifetime),
             CreatedByIp = http.Connection.RemoteIpAddress?.ToString(),
             CreatedAt = now,
+            // Döndürülen token ilk girişteki seçimi taşır — taşınmazsa oturum
+            // çerezi ilk yenilemede sessizce kalıcıya döner.
+            Persistent = existing.Persistent,
         });
         await db.SaveChangesAsync();
 
         var access = tokenService.CreateAccessToken(existing.User);
-        SetRefreshCookie(http, newRaw, now.Add(tokenService.RefreshTokenLifetime), env);
+        SetRefreshCookie(http, newRaw, now.Add(tokenService.RefreshTokenLifetime), env, existing.Persistent);
         return Results.Ok(new LoginResponse(access.Value, access.ExpiresAt));
     }
 
@@ -343,7 +371,8 @@ public static class AuthEndpoints
     }
 
     private static async Task<IResult> IssueSession(
-        ApplicationUser user, ITokenService tokenService, AppDbContext db, HttpContext http, IWebHostEnvironment env)
+        ApplicationUser user, ITokenService tokenService, AppDbContext db, HttpContext http, IWebHostEnvironment env,
+        bool persistent)
     {
         var access = tokenService.CreateAccessToken(user);
         var rawRefresh = tokenService.CreateRefreshToken();
@@ -358,14 +387,16 @@ public static class AuthEndpoints
             ExpiresAt = expiresAt,
             CreatedByIp = http.Connection.RemoteIpAddress?.ToString(),
             CreatedAt = now,
+            Persistent = persistent,
         });
         await db.SaveChangesAsync();
 
-        SetRefreshCookie(http, rawRefresh, expiresAt, env);
+        SetRefreshCookie(http, rawRefresh, expiresAt, env, persistent);
         return Results.Ok(new LoginResponse(access.Value, access.ExpiresAt));
     }
 
-    private static void SetRefreshCookie(HttpContext http, string rawToken, DateTimeOffset expiresAt, IWebHostEnvironment env)
+    private static void SetRefreshCookie(
+        HttpContext http, string rawToken, DateTimeOffset expiresAt, IWebHostEnvironment env, bool persistent)
     {
         http.Response.Cookies.Append(RefreshCookieName, rawToken, new CookieOptions
         {
@@ -376,7 +407,12 @@ public static class AuthEndpoints
             Secure = !env.IsDevelopment(),
             SameSite = SameSiteMode.Strict,
             Path = RefreshCookiePath,
-            Expires = expiresAt,
+            // "Beni kaydet" seçilmediyse Expires VERİLMEZ: çerez oturum çerezi
+            // olur ve tarayıcı kapanınca silinir. Sunucudaki token yine 30 gün
+            // geçerli kalır — kısaltmak, aynı hesabın "beni kaydet" seçilmiş
+            // başka bir cihazdaki oturumunu da etkilemezdi ama gereksiz;
+            // istemcinin çerezi gittiğinde o token zaten kimseye yaramaz.
+            Expires = persistent ? expiresAt : null,
         });
     }
 

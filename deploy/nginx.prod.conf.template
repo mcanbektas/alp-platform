@@ -1,0 +1,124 @@
+# Üretim: TLS sonlandırma + SPA + /api ters vekili.
+#
+# Bu bir ŞABLONDUR. nginx imajının giriş noktası /etc/nginx/templates/ altındaki
+# `.template` dosyalarını envsubst'tan geçirip /etc/nginx/conf.d/ altına yazar ve
+# YALNIZCA ortamda tanımlı değişkenleri değiştirir — bu yüzden `$host`, `$uri`,
+# `$remote_addr` gibi nginx değişkenleri olduğu gibi kalır, `${APP_DOMAIN}`
+# değişir. Alan adını depodaki dosyaya yazmak yerine böyle geçmek, sunucuda
+# `git pull` sırasında yerel değişiklik çakışması çıkmasını da önler.
+#
+# Gerekli: APP_DOMAIN ortam değişkeni ve /etc/letsencrypt altında geçerli sertifika.
+# İlk sertifika alınmadan önce 443 bloğu açılamaz — sıra deploy/README.md'de.
+#
+# DİKKAT — nginx'te `add_header` MİRAS ALINMAZ (bkz. nginx.conf'taki aynı not).
+
+# ---- HTTP: yalnızca ACME ve yönlendirme ----
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${APP_DOMAIN};
+
+    server_tokens off;
+
+    # Let's Encrypt http-01 doğrulaması. Yönlendirmeden ÖNCE gelmeli, yoksa
+    # doğrulama isteği de 301 yer ve sertifika yenilemesi sessizce durur.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ---- HTTPS ----
+server {
+    # IPv6 de açık — konteyner içi sağlık kontrolü `localhost`u ::1'e çözer.
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${APP_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${APP_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${APP_DOMAIN}/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    client_max_body_size 12m;
+    server_tokens off;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_types
+        text/plain text/css text/javascript
+        application/javascript application/json application/xml
+        image/svg+xml;
+
+    # HSTS yalnızca burada: TLS'siz yapılandırmada anlamsızdır ve alan adını
+    # sertifika hazır olmadan HTTPS'e kilitlerdi.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # ---- API ters vekili (nginx.conf ile birebir aynı) ----
+    # Değişken + resolver: sabit yazıldığında nginx api'nin IP'sini açılışta bir
+    # kez çözer ve saklar; api konteyneri yeniden yaratıldığında ölü adrese
+    # vekiller. Ayrıntı nginx.conf'taki aynı bloğun yorumunda.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    location /api/ {
+        set $api_upstream http://api:8080;
+        proxy_pass $api_upstream$request_uri;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    120s;
+        proxy_read_timeout    120s;
+        proxy_buffering off;
+    }
+
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        try_files $uri =404;
+    }
+
+    location = /index.html {
+        add_header Cache-Control "no-store, must-revalidate" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        try_files $uri =404;
+    }
+
+    # SPA geri düşüşü — BrowserRouter derin bağlantısı bu satır olmadan 404 alır.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

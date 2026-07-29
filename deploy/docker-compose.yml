@@ -1,0 +1,103 @@
+# Temel yığın: postgres + api + nginx(web). İmajları YERELDE derler.
+#
+# Kullanım (bu dizinden):
+#   cp .env.example .env   ve içindeki değerleri doldur
+#   docker compose up -d --build
+#   http://localhost:8080
+#
+# Üretimde bunun üstüne docker-compose.prod.yml biner ve `build:` yerine
+# ghcr.io'daki hazır imajları kullanır — sunucu derleme yapmaz.
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+name: alp-pcb-toolkit
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # api `service_healthy` bekler: Postgres hazır olmadan başlarsa açılıştaki
+      # migration bağlantı hatasıyla düşer ve konteyner yeniden başlama
+      # döngüsüne girer.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - alpnet
+
+  api:
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Yerel yığın Development olarak koşar. Tek gerekçe: yenileme çerezi
+      # üretimde Secure=true işaretlenir (AuthEndpoints.SetRefreshCookie) ve
+      # tarayıcı Secure çerezi düz http://localhost üzerinde saklamaz —
+      # yenileme akışı hiç sınanamazdı. Üretim override'ı Production'a çevirir.
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+      Jwt__Key: ${JWT_KEY}
+      Jwt__Issuer: ${JWT_ISSUER:-alp-pcb-toolkit}
+      Jwt__Audience: ${JWT_AUDIENCE:-alp-pcb-toolkit}
+      App__FrontendBaseUrl: ${FRONTEND_BASE_URL:-http://localhost:8080}
+      # TLS ters vekilde biter; konteynerdeki uygulama yalnızca HTTP dinler.
+      App__HttpsRedirection: "false"
+      # nginx'in bulunduğu ağ tanıtılmazsa X-Forwarded-For yok sayılır ve
+      # bütün istekler tek IP'ye düşer (hız sınırı tek kova olur).
+      App__KnownProxyNetworks__0: ${PROXY_NETWORK:-172.28.0.0/16}
+      Database__MigrateOnStartup: "true"
+      Storage__ReportsPath: /app/App_Data/reports
+      # Kalıcı volume: anahtarlar konteynerle birlikte silinirse o an postası
+      # yolda olan doğrulama/parola sıfırlama bağlantıları geçersizleşir.
+      DataProtection__KeysPath: /app/App_Data/keys
+      Reports__FontsPath: /app/fonts
+      # SMTP verilmezse konsol göndericisine düşer (postalar günlüğe yazılır).
+      Smtp__Host: ${SMTP_HOST:-}
+      Smtp__Port: ${SMTP_PORT:-587}
+      Smtp__User: ${SMTP_USER:-}
+      Smtp__Password: ${SMTP_PASSWORD:-}
+      Smtp__FromAddress: ${SMTP_FROM_ADDRESS:-}
+      Smtp__FromName: ${SMTP_FROM_NAME:-ALP PCB Toolkit}
+      Smtp__Security: ${SMTP_SECURITY:-StartTls}
+    volumes:
+      - reports:/app/App_Data
+    networks:
+      - alpnet
+
+  web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    networks:
+      - alpnet
+
+volumes:
+  pgdata:
+  reports:
+
+networks:
+  alpnet:
+    driver: bridge
+    ipam:
+      config:
+        # Alt ağ sabitlenir: api'nin App__KnownProxyNetworks değeri bu aralığa
+        # bakar. Docker'ın seçtiği rastgele aralıkla bırakılırsa değer her
+        # ortamda tutmaz ve gerçek istemci IP'si sessizce kaybolur.
+        - subnet: ${PROXY_NETWORK:-172.28.0.0/16}

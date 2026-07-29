@@ -35,6 +35,15 @@ public record CalculationDto(
     DateTimeOffset UpdatedAt
 );
 
+// Tekil hesap yanıtı. Araç ekranı kaydı geri yüklerken hangi projeye ait
+// olduğunu da göstermek ister; ikinci bir proje isteği attırmamak için üst
+// projenin kimliği ve adı yanıta katılır.
+public record CalculationDetailResponse(
+    CalculationDto Calculation,
+    Guid ProjectId,
+    string ProjectName
+);
+
 public record ProjectDetailResponse(
     Guid Id,
     string Name,

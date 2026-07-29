@@ -7,6 +7,7 @@ using Alp.Data;
 using Alp.Domain;
 using Alp.Reports;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
@@ -85,7 +86,23 @@ builder.Services
 
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<ITokenService, TokenService>();
-builder.Services.AddSingleton<IEmailSender, ConsoleEmailSender>();
+
+// ---- E-posta ----
+// SMTP bilgisi verilmişse gerçek gönderici, verilmemişse konsol göndericisi.
+// Sessiz düşüş bilinçli: geliştirici SMTP hesabı kurmadan çalışabilsin diye.
+// Üretimde bu düşüş sessiz kalmaz — aşağıda uyarı basılır, çünkü
+// SignIn.RequireConfirmedEmail açıkken doğrulama postası gitmezse HİÇBİR
+// kullanıcı giriş yapamaz.
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
+var smtp = builder.Configuration.GetSection(SmtpOptions.SectionName).Get<SmtpOptions>() ?? new SmtpOptions();
+if (smtp.IsConfigured)
+{
+    builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+}
+else
+{
+    builder.Services.AddSingleton<IEmailSender, ConsoleEmailSender>();
+}
 
 // ---- Hız sınırı ----
 // IP başına ayrı kova — AddFixedWindowLimiter(name, ...) TEK bir global kova
@@ -153,17 +170,66 @@ QuestPDF.Settings.License = LicenseType.Community;
 
 builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection(StorageOptions.SectionName));
 
+// ---- Data Protection ----
+// Identity'nin e-posta doğrulama ve parola sıfırlama jetonları bu anahtarlarla
+// korunur. Varsayılan konum konteynerin kendi dosya sistemidir (~/.aspnet):
+// konteyner her yeniden yaratıldığında (yani HER dağıtımda) anahtarlar kaybolur
+// ve o an postası yolda olan bütün doğrulama/sıfırlama bağlantıları geçersizleşir.
+// Kalıcı volume'a yazılır. SetApplicationName sabittir — değişirse eski
+// anahtarlarla üretilmiş jetonlar çözülemez.
+var keysPath = builder.Configuration["DataProtection:KeysPath"];
+if (!string.IsNullOrWhiteSpace(keysPath))
+{
+    Directory.CreateDirectory(keysPath);
+    builder.Services
+        .AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(keysPath))
+        .SetApplicationName("alp-pcb-toolkit");
+}
+
 var logoPath = Path.Combine(builder.Environment.ContentRootPath, "Assets", "logo.png");
-builder.Services.AddSingleton(new PdfReportBuilder(File.ReadAllBytes(logoPath)));
+var logoBytes = File.ReadAllBytes(logoPath);
+// Çözülemeyen bir SVG raporu düşürmez, atlanır — ama sessiz kalmaz: belgede
+// yerine not basılır, sunucuda uyarı olarak görünür. Aksi hâlde raporlar
+// zamanla çizimsiz çıkar ve kimse fark etmez.
+builder.Services.AddSingleton(sp => new PdfReportBuilder(
+    logoBytes,
+    message => sp.GetRequiredService<ILogger<PdfReportBuilder>>().LogWarning("{Message}", message)));
 builder.Services.AddSingleton<XlsxReportBuilder>();
 
 var app = builder.Build();
+
+// ---- Migration ----
+// Konteynerde `dotnet ef` yoktur (SDK yok, yalnızca runtime). Bu yüzden şema
+// açılışta uygulanır — ama yalnızca açıkça istendiğinde: birden çok kopya aynı
+// anda ayağa kalkarsa ikisi birden migration koşmaya çalışır. Tek kopyalı
+// dağıtımda (deploy/docker-compose.yml) açıktır; kopya sayısı artarsa kapatılıp
+// ayrı bir migration adımına taşınır. docs/uyelik-ve-rapor-plani.md §7
+if (builder.Configuration.GetValue("Database:MigrateOnStartup", false))
+{
+    using var scope = app.Services.CreateScope();
+    await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
+}
 
 // Faz 3b tamamlanınca web/public/fonts/ altına gerçek dosyalar konacak; o ana
 // kadar dizin yok, sessizce atlanır (PdfReportBuilder platform yazı tipine düşer).
 var fontsPath = builder.Configuration["Reports:FontsPath"]
     ?? Path.Combine(builder.Environment.ContentRootPath, "..", "..", "web", "public", "fonts");
-ReportFonts.RegisterIfAvailable(fontsPath);
+var registeredFonts = ReportFonts.RegisterIfAvailable(fontsPath);
+if (!smtp.IsConfigured && !app.Environment.IsDevelopment())
+{
+    app.Logger.LogWarning(
+        "SMTP yapılandırılmadı — doğrulama ve parola sıfırlama postaları yalnızca günlüğe yazılıyor. "
+        + "E-posta doğrulaması zorunlu olduğu için kullanıcılar giriş YAPAMAZ. Smtp__Host / Smtp__FromAddress kurun.");
+}
+
+if (registeredFonts == 0 && !app.Environment.IsDevelopment())
+{
+    app.Logger.LogWarning(
+        "Rapor yazı tipi bulunamadı ({Path}) — PDF platform yazı tipine düşecek. "
+        + "Konteyner tabanında sistem yazı tipi yoksa yazılar boş çıkar. Faz 3b.",
+        fontsPath);
+}
 
 if (app.Environment.IsDevelopment())
 {
@@ -172,14 +238,51 @@ if (app.Environment.IsDevelopment())
 
 // Ters vekil arkasında gerçek istemci IP'sini görebilmek için (hız sınırı ve
 // RefreshToken.CreatedByIp bu değeri kullanır). KnownProxies/KnownNetworks
-// boşken yalnızca loopback güvenilir — üretim dağıtımında (Faz 8) vekilin
-// gerçek adresi buraya eklenir, yoksa varsayılan olarak başlık yok sayılır.
-app.UseForwardedHeaders(new ForwardedHeadersOptions
+// boşken yalnızca loopback güvenilir; konteynerde nginx loopback'ten gelmez,
+// bu yüzden vekilin bulunduğu ağ burada tanıtılmazsa X-Forwarded-For sessizce
+// yok sayılır ve BÜTÜN istekler nginx konteynerinin tek IP'sine düşer — hız
+// sınırı tek kova olur, kayıtlı IP hep aynı çıkar.
+// `App:KnownProxyNetworks` CIDR listesidir (compose ağının alt ağı),
+// `App:KnownProxies` tek adres listesi. İkisi de boşsa varsayılan (loopback)
+// davranış korunur.
+var forwardedOptions = new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
-});
+};
 
-app.UseHttpsRedirection();
+foreach (var cidr in builder.Configuration.GetSection("App:KnownProxyNetworks").Get<string[]>() ?? [])
+{
+    // "172.20.0.0/16" — adres ve önek ayrı ayrı ayrıştırılır; bozuk değer
+    // sessizce atlanmaz, açılışta durdurur (yanlış yazılmış bir CIDR, hız
+    // sınırının çalıştığı sanılırken çalışmaması demektir).
+    var parts = cidr.Split('/');
+    if (parts.Length != 2
+        || !System.Net.IPAddress.TryParse(parts[0], out var network)
+        || !int.TryParse(parts[1], out var prefix))
+    {
+        throw new InvalidOperationException($"App:KnownProxyNetworks içindeki '{cidr}' geçerli bir CIDR değil.");
+    }
+    forwardedOptions.KnownNetworks.Add(new IPNetwork(network, prefix));
+}
+
+foreach (var address in builder.Configuration.GetSection("App:KnownProxies").Get<string[]>() ?? [])
+{
+    if (!System.Net.IPAddress.TryParse(address, out var proxy))
+    {
+        throw new InvalidOperationException($"App:KnownProxies içindeki '{address}' geçerli bir IP adresi değil.");
+    }
+    forwardedOptions.KnownProxies.Add(proxy);
+}
+
+app.UseForwardedHeaders(forwardedOptions);
+
+// TLS ters vekilde biter; konteynerdeki uygulama yalnızca HTTP dinler ve
+// yönlendirilecek bir HTTPS portu bilmez. Açık bırakılırsa her istekte uyarı
+// basar, kapatılırsa yönlendirmeyi nginx yapar. Geliştirmede varsayılan açık.
+if (builder.Configuration.GetValue("App:HttpsRedirection", true))
+{
+    app.UseHttpsRedirection();
+}
 app.UseCors();
 // Authentication/Authorization RateLimiter'dan ÖNCE gelir: "reports"
 // politikası kullanıcı kimliğine göre bölümlenir (UserKey), bu da
@@ -187,6 +290,26 @@ app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseRateLimiter();
+
+// ---- Sağlık uçları ----
+// Konteyner düzeyinde iki ayrı soru sorulur ve karıştırılmamalı:
+// `/health` süreç ayakta mı (liveness), `/health/ready` veritabanına
+// bağlanabiliyor mu (readiness). İkisi tek uçta birleştirilirse geçici bir
+// veritabanı kesintisi konteynerin öldürülüp yeniden başlatılmasına yol açar —
+// yeniden başlatma veritabanını geri getirmez.
+// Yol `/api` altındadır: nginx yalnızca `/api/` konumunu vekile geçirir,
+// bunun dışındaki her yol SPA'ya düşer. `/health` yazılsaydı dışarıdan
+// istendiğinde index.html dönerdi ve kontrol her zaman "sağlıklı" görünürdü.
+app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }))
+    .AllowAnonymous()
+    .DisableRateLimiting();
+
+app.MapGet("/api/health/ready", async (AppDbContext db, CancellationToken ct) =>
+        await db.Database.CanConnectAsync(ct)
+            ? Results.Ok(new { status = "ready" })
+            : Results.StatusCode(StatusCodes.Status503ServiceUnavailable))
+    .AllowAnonymous()
+    .DisableRateLimiting();
 
 app.MapAuthEndpoints();
 app.MapReportEndpoints();

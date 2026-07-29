@@ -36,6 +36,7 @@ public static class ProjectEndpoints
         // Calculation.Project.UserId üzerinden doğrulanır (aşağıya bkz.).
         var calculations = app.MapGroup("/api/calculations").RequireAuthorization();
 
+        calculations.MapGet("/{id:guid}", GetCalculation);
         calculations.MapPatch("/{id:guid}", UpdateCalculation).LimitBodySize(CalculationBodyLimitBytes);
         calculations.MapDelete("/{id:guid}", DeleteCalculation);
     }
@@ -192,6 +193,25 @@ public static class ProjectEndpoints
         await db.SaveChangesAsync();
 
         return Results.Created($"/api/calculations/{calculation.Id}", ToDto(calculation));
+    }
+
+    // Kaydedilmiş bir hesabı araç ekranına geri yüklemek için tek kayıt okuma.
+    // Proje detayı üzerinden de okunabilirdi ama araç ekranı yalnızca `?hesap=`
+    // parametresindeki kimliği bilir — üst projeyi bilmediği için o yolu
+    // kullanamaz. Sahiplik yine Project.UserId üzerinden doğrulanır.
+    private static async Task<IResult> GetCalculation(Guid id, AppDbContext db, HttpContext http)
+    {
+        var userId = CurrentUserId(http);
+        if (userId is null) return Results.Unauthorized();
+
+        var calculation = await db.Calculations.Include(c => c.Project).FirstOrDefaultAsync(c => c.Id == id);
+        if (calculation is null || calculation.Project is null || calculation.Project.UserId != userId)
+        {
+            return Results.NotFound(new ApiError("CALCULATION_NOT_FOUND"));
+        }
+
+        return Results.Ok(new CalculationDetailResponse(
+            ToDto(calculation), calculation.Project.Id, calculation.Project.Name));
     }
 
     private static async Task<IResult> UpdateCalculation(Guid id, UpdateCalculationRequest req, AppDbContext db, HttpContext http)

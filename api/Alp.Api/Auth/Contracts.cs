@@ -1,7 +1,9 @@
 namespace Alp.Api.Auth;
 
 public record RegisterRequest(string Email, string Password, string DisplayName);
-public record LoginRequest(string Email, string Password);
+// RememberMe isteğe bağlıdır ve varsayılanı false: alan gönderilmezse oturum
+// tarayıcı kapanınca biter. Eski istemci gövdesi bu yüzden kırılmaz.
+public record LoginRequest(string Email, string Password, bool RememberMe = false);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Email, string Token, string NewPassword);
 

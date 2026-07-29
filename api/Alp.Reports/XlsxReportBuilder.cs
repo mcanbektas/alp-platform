@@ -6,8 +6,26 @@ namespace Alp.Reports;
 // docs/uyelik-ve-rapor-plani.md §5.4. PDF'te yan yana duran şematik/grafik
 // burada yok — SVG basılmaz; grafiğin ham verisi (§5.1'deki `chart.table`)
 // sütun olarak girer, kullanıcı kendi grafiğini çizebilsin diye.
+//
+// GERÇEK EXCEL GRAFİĞİ YOK ve eklenemiyor: ClosedXML grafik nesnesi
+// oluşturamaz (kütüphane sınırı). Ham veri tam bu yüzden tabloya yazılıyor —
+// kullanıcı aralığı seçip kendi grafiğini üç tıkta ekliyor.
 public class XlsxReportBuilder
 {
+    // PDF ile AYNI palet (solder-light.css). Rapor sitenin kendi renklerini
+    // kullanır, ayrı bir "kâğıt paleti" yok (§5.1.1 kararı) — iki üretici
+    // ayrışmasın diye değerler burada da birebir tekrarlanıyor.
+    private static readonly XLColor Green = XLColor.FromHtml("#007937");
+    private static readonly XLColor Muted = XLColor.FromHtml("#5d6e60");
+    private static readonly XLColor Rule = XLColor.FromHtml("#d2e1d5");
+    private static readonly XLColor Raised = XLColor.FromHtml("#f6fcf7");
+
+    // `AdjustToContents()` en uzun HÜCREYE göre genişletiyor; notlar tam cümle
+    // olduğu için A sütunu 220 karakteri buluyordu ve değerler ekranın dışında
+    // kalıyordu. Tavan + uzun metinlerde satır kaydırma bunu düzeltir.
+    private const double MaxColumnWidth = 46;
+    private const double MinColumnWidth = 9;
+
     public byte[] Build(ReportPayload payload)
     {
         using var wb = new XLWorkbook();
@@ -16,50 +34,99 @@ public class XlsxReportBuilder
         summary.Cell(1, 1).Value = payload.Title;
         summary.Cell(1, 1).Style.Font.Bold = true;
         summary.Cell(1, 1).Style.Font.FontSize = 14;
-        summary.Cell(2, 1).Value = "Hazırlayan";
-        summary.Cell(2, 2).Value = payload.PreparedBy;
+        summary.Cell(1, 1).Style.Font.FontColor = Green;
+
+        // Künye satırları ARDIŞIK yazılır. Sabit satır numarası kullanıldığında
+        // firma boşken araya boş bir satır kalıyor ve künye ikiye bölünmüş
+        // görünüyordu.
+        var head = 2;
+        summary.Cell(head, 1).Value = "Hazırlayan";
+        summary.Cell(head, 2).Value = payload.PreparedBy;
+        head++;
         if (!string.IsNullOrWhiteSpace(payload.Company))
         {
-            summary.Cell(3, 1).Value = "Firma";
-            summary.Cell(3, 2).Value = payload.Company;
+            summary.Cell(head, 1).Value = "Firma";
+            summary.Cell(head, 2).Value = payload.Company;
+            head++;
         }
-        summary.Cell(4, 1).Value = "Tarih";
-        summary.Cell(4, 2).Value = payload.Date;
+        summary.Cell(head, 1).Value = "Tarih";
+        WriteDate(summary.Cell(head, 2), payload.Date);
+        // Tarih gerçek bir sayı hücresi olduğu için Excel onu SAĞA yaslar ve
+        // künyedeki öteki değerlerden kopuk düşer. Hizalama elle sola alınır;
+        // hücrenin tipi (ve dolayısıyla sıralanabilirliği) değişmez.
+        summary.Cell(head, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Left;
+        summary.Range(2, 1, head, 1).Style.Font.FontColor = Muted;
 
-        var row = 6;
+        // Hesap sayfaları ÖNCE kurulur: özet listesindeki satırlar onlara
+        // köprü verecek, köprünün hedefi de var olmalı.
+        var sheets = new List<IXLWorksheet>();
+        for (var i = 0; i < payload.Sections.Count; i++)
+        {
+            sheets.Add(BuildSectionSheet(wb, i + 1, payload.Sections[i]));
+        }
+
+        var row = head + 2;
         summary.Cell(row, 1).Value = "#";
         summary.Cell(row, 2).Value = "Hesap";
-        summary.Range(row, 1, row, 2).Style.Font.Bold = true;
+        StyleTableHeader(summary.Range(row, 1, row, 2));
         row++;
+        var firstDataRow = row;
         for (var i = 0; i < payload.Sections.Count; i++)
         {
             var s = payload.Sections[i];
             summary.Cell(row, 1).Value = i + 1;
-            summary.Cell(row, 2).Value = s.Mode is null ? s.ToolName : $"{s.ToolName} — {s.Mode}";
+            // Sıra numarası sola yaslanır: geniş bir sütunda sağa yaslı sayı,
+            // yanındaki addan kopup ortada asılı kalıyordu.
+            summary.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Left;
+
+            var nameCell = summary.Cell(row, 2);
+            nameCell.Value = s.Mode is null ? s.ToolName : $"{s.ToolName} — {s.Mode}";
+            // Ada tıklayınca ilgili sayfaya gidilir. Özet tek başına raporun
+            // TAMAMI sanılıyordu; alttaki sayfa sekmeleri gözden kaçıyor.
+            nameCell.SetHyperlink(new XLHyperlink(sheets[i].Cell(1, 1)));
             row++;
         }
-        summary.Columns().AdjustToContents();
-
-        for (var i = 0; i < payload.Sections.Count; i++)
+        if (row > firstDataRow)
         {
-            BuildSectionSheet(wb, i + 1, payload.Sections[i]);
+            summary.Range(firstDataRow - 1, 1, row - 1, 2).Style
+                .Border.OutsideBorder = XLBorderStyleValues.Thin;
+            summary.Range(firstDataRow - 1, 1, row - 1, 2).Style
+                .Border.OutsideBorderColor = Rule;
         }
+
+        row++;
+        summary.Cell(row, 1).Value = payload.Sections.Count == 1
+            ? "Hesabın girdileri, sonuçları, denklemleri ve grafik verisi için yukarıdaki ada "
+              + "tıkla ya da alttaki sayfa sekmesine geç."
+            : "Her hesabın ayrıntısı kendi sayfasındadır — yukarıdaki ada tıkla ya da "
+              + "alttaki sayfa sekmelerine geç.";
+        summary.Cell(row, 1).Style.Font.FontColor = Muted;
+        summary.Cell(row, 1).Style.Font.Italic = true;
+        summary.Cell(row, 1).Style.Font.FontSize = 9;
+
+        FitColumns(summary);
+
+        // Dosya İÇERİKLE açılır. Tek hesaplı raporda "Özet" neredeyse boştur ve
+        // raporun tamamı sanılıyor; ilk hesap sayfası etkin bırakılır. Birden
+        // çok hesapta özet gerçekten giriş sayfasıdır, orada kalınır.
+        if (sheets.Count == 1) sheets[0].SetTabActive();
+        else summary.SetTabActive();
 
         using var stream = new MemoryStream();
         wb.SaveAs(stream);
         return stream.ToArray();
     }
 
-    private static void BuildSectionSheet(XLWorkbook wb, int no, ReportSection section)
+    private static IXLWorksheet BuildSectionSheet(XLWorkbook wb, int no, ReportSection section)
     {
-        // Sayfa adı 31 karakteri ve Excel'in yasakladığı karakterleri
-        // (: \ / ? * [ ]) aşamaz.
         var name = SanitizeSheetName($"{no} {section.ToolName}");
         var ws = wb.Worksheets.Add(name);
 
         var r = 1;
         ws.Cell(r, 1).Value = section.Mode is null ? section.ToolName : $"{section.ToolName} — {section.Mode}";
         ws.Cell(r, 1).Style.Font.Bold = true;
+        ws.Cell(r, 1).Style.Font.FontSize = 12;
+        ws.Cell(r, 1).Style.Font.FontColor = Green;
         r += 2;
 
         if (section.Inputs.Count > 0)
@@ -74,14 +141,37 @@ public class XlsxReportBuilder
             r++;
         }
 
+        // Denklemler PDF'te var, Excel'de hiç yoktu: hangi bağıntının
+        // kullanıldığı bilgisi tabloya geçen kullanıcı için kayboluyordu.
+        if (section.Formula.Count > 0)
+        {
+            WriteBlockHeading(ws, r, "Denklemler");
+            r++;
+            foreach (var line in section.Formula)
+            {
+                ws.Cell(r, 1).Value = line;
+                ws.Cell(r, 1).Style.Font.FontName = "Consolas";
+                // Formül SARDIRILMAZ. Sardırınca ifade ortadan bölünüyordu
+                // ("R(T) = ρ₂₀·[1 + α(T − 20)] ·" / "L / (W·t)") ve denklem
+                // yanlış okunuyordu. Satırın sağındaki hücreler boş olduğu için
+                // metin taşar ve tam görünür. Notlar bunun tersi: onlar düz
+                // cümle, sarmak doğru.
+                ws.Cell(r, 1).Style.Alignment.WrapText = false;
+                r++;
+            }
+            r++;
+        }
+
         if (section.Notes.Count > 0)
         {
-            ws.Cell(r, 1).Value = "Notlar";
-            ws.Cell(r, 1).Style.Font.Bold = true;
+            WriteBlockHeading(ws, r, "Notlar");
             r++;
             foreach (var note in section.Notes)
             {
                 ws.Cell(r, 1).Value = note.Text;
+                // Sütun genişliğini şişiren asıl metin bu: sardırılır.
+                ws.Cell(r, 1).Style.Alignment.WrapText = true;
+                ws.Cell(r, 1).Style.Alignment.Vertical = XLAlignmentVerticalValues.Top;
                 r++;
             }
             r++;
@@ -89,14 +179,35 @@ public class XlsxReportBuilder
 
         if (section.Chart?.Table is { } table && table.Columns.Count > 0)
         {
-            ws.Cell(r, 1).Value = section.Chart.Title ?? "Grafik verisi";
-            ws.Cell(r, 1).Style.Font.Bold = true;
+            // Blok başlığı SABİT ve kısadır. `Chart.Title` bir başlık değil,
+            // grafiği anlatan tam cümledir ("Kesit alanı arttıkça akım
+            // kapasitesi artar; …"); kalın başlık olarak basıldığında tablonun
+            // çok ötesine taşıyor ve blok başlangıcı seçilemiyordu. Cümle
+            // altta, sönük ve sardırılmış satırda durur.
+            WriteBlockHeading(ws, r, "Grafik verisi");
             r++;
+            if (!string.IsNullOrWhiteSpace(section.Chart.Title))
+            {
+                ws.Cell(r, 1).Value = section.Chart.Title;
+                ws.Cell(r, 1).Style.Font.FontColor = Muted;
+                ws.Cell(r, 1).Style.Font.FontSize = 9;
+                ws.Cell(r, 1).Style.Alignment.WrapText = true;
+                ws.Cell(r, 1).Style.Alignment.Vertical = XLAlignmentVerticalValues.Top;
+                r++;
+            }
+            ws.Cell(r, 1).Value =
+                "Aşağıdaki aralığı seçip Ekle → Grafik ile kendi grafiğini çizebilirsin.";
+            ws.Cell(r, 1).Style.Font.Italic = true;
+            ws.Cell(r, 1).Style.Font.FontColor = Muted;
+            ws.Cell(r, 1).Style.Font.FontSize = 9;
+            r++;
+
+            var headerRow = r;
             for (var c = 0; c < table.Columns.Count; c++)
             {
                 ws.Cell(r, c + 1).Value = table.Columns[c];
-                ws.Cell(r, c + 1).Style.Font.Bold = true;
             }
+            StyleTableHeader(ws.Range(r, 1, r, table.Columns.Count));
             r++;
             foreach (var dataRow in table.Rows)
             {
@@ -106,16 +217,29 @@ public class XlsxReportBuilder
                 }
                 r++;
             }
+
+            if (r > headerRow + 1)
+            {
+                var range = ws.Range(headerRow, 1, r - 1, table.Columns.Count);
+                range.Style.Border.InsideBorder = XLBorderStyleValues.Hair;
+                range.Style.Border.InsideBorderColor = Rule;
+                range.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
+                range.Style.Border.OutsideBorderColor = Rule;
+                range.SetAutoFilter();
+            }
         }
 
-        ws.Columns().AdjustToContents();
+        FitColumns(ws);
+        // Başlık satırı sabit kalsın: uzun sayfada hangi hesaba baktığın
+        // aşağı inince kaybolmasın.
+        ws.SheetView.FreezeRows(1);
+        return ws;
     }
 
     private static int WriteFieldBlock(IXLWorksheet ws, int startRow, string heading, IReadOnlyList<ReportField> fields)
     {
         var r = startRow;
-        ws.Cell(r, 1).Value = heading;
-        ws.Cell(r, 1).Style.Font.Bold = true;
+        WriteBlockHeading(ws, r, heading);
         r++;
         foreach (var field in fields)
         {
@@ -131,9 +255,45 @@ public class XlsxReportBuilder
         return r;
     }
 
+    private static void WriteBlockHeading(IXLWorksheet ws, int row, string text)
+    {
+        var cell = ws.Cell(row, 1);
+        cell.Value = text;
+        cell.Style.Font.Bold = true;
+        cell.Style.Font.FontColor = Green;
+        ws.Range(row, 1, row, 3).Style.Fill.BackgroundColor = Raised;
+        ws.Range(row, 1, row, 3).Style.Border.BottomBorder = XLBorderStyleValues.Thin;
+        ws.Range(row, 1, row, 3).Style.Border.BottomBorderColor = Rule;
+    }
+
+    private static void StyleTableHeader(IXLRange range)
+    {
+        range.Style.Font.Bold = true;
+        range.Style.Font.FontColor = Green;
+        range.Style.Fill.BackgroundColor = Raised;
+        range.Style.Border.BottomBorder = XLBorderStyleValues.Thin;
+        range.Style.Border.BottomBorderColor = Rule;
+    }
+
+    // İçeriğe göre genişlet, sonra TAVAN uygula. Sıra önemli: tavan önce
+    // konursa `AdjustToContents` onu ezer.
+    private static void FitColumns(IXLWorksheet ws)
+    {
+        ws.Columns().AdjustToContents();
+        foreach (var column in ws.ColumnsUsed())
+        {
+            if (column.Width > MaxColumnWidth) column.Width = MaxColumnWidth;
+            else if (column.Width < MinColumnWidth) column.Width = MinColumnWidth;
+        }
+    }
+
     // Sayı olarak ayrıştırılabiliyorsa gerçek sayı hücresine yazılır —
     // kullanıcı formülde kullanabilsin diye (§5.4). Ondalık ayırıcı her
     // zaman nokta: num.js'in ürettiği dize dile göre değişmez.
+    //
+    // Sayı BİÇİMİ verilmez. Değerler zaten ekrandaki anlamlı basamağıyla
+    // geliyor (0.01051 gibi); sabit bir biçim uygulamak onları yuvarlayıp
+    // gösterir ve hücrede görünen değer ile gerçek değer ayrışırdı.
     private static void WriteValue(IXLCell cell, string raw)
     {
         if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var n))
@@ -146,9 +306,38 @@ public class XlsxReportBuilder
         }
     }
 
+    // Tarih gerçek tarih hücresi olur: metin kalırsa sıralanamaz, biçimi
+    // değiştirilemez ve tarih fonksiyonlarına girmez. Yük `dd.MM.yyyy`
+    // gönderiyor (reportText.js → reportDateStamp); ayrıştırılamayan bir
+    // değer geldiğinde metin olarak bırakılır, veri kaybolmaz.
+    private static void WriteDate(IXLCell cell, string raw)
+    {
+        if (DateTime.TryParseExact(raw, "dd.MM.yyyy", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var date))
+        {
+            cell.Value = date;
+            cell.Style.DateFormat.Format = "dd.MM.yyyy";
+        }
+        else
+        {
+            cell.Value = raw;
+        }
+    }
+
+    // Excel sayfa adı 31 karakteri ve şu karakterleri kabul etmez: : \ / ? * [ ]
+    //
+    // Kesme KELİME SINIRINDA yapılır: ham kesme "1 Yol Genişliği ve Akım Kapasit"
+    // gibi yarım kelimeyle bitiyordu. Sınırdan önce boşluk yoksa ham kesmeye
+    // düşülür — ad üretilemeden kalmaz.
     private static string SanitizeSheetName(string name)
     {
-        var cleaned = new string(name.Select(c => ":\\/?*[]".Contains(c) ? '-' : c).ToArray());
-        return cleaned.Length > 31 ? cleaned[..31] : cleaned;
+        var cleaned = new string(name.Select(c => ":\\/?*[]".Contains(c) ? '-' : c).ToArray()).Trim();
+        if (cleaned.Length <= 31) return cleaned.Length > 0 ? cleaned : "Hesap";
+
+        var cut = cleaned[..31];
+        var lastSpace = cut.LastIndexOf(' ');
+        // Çok erken bir boşlukta kesip adı anlamsız kısaltmamak için alt sınır.
+        if (lastSpace >= 12) cut = cut[..lastSpace];
+        return cut.TrimEnd(' ', '-', '—');
     }
 }
