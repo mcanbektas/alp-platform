@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Dar kapsamlı sunucu testleri. Kapsam bilinçle sınırlı: elle doğrulanmış ve
+       elle doğrulanması pahalı olan KURALLAR test edilir — rapor önizlemesi
+       süzmesi, boyutsuz SVG kapısı, logo tür tespiti, kalınlık kayıtlarında ad
+       tekliği / sayı sınırı / sahiplik ve proje-hesap sahipliği. Uçlar HTTP
+       üzerinden değil, işleyicileri doğrudan çağırarak sınanır: korunmak istenen
+       şey kuralın kendisi; yönlendirme, kimlik doğrulama ve hız sınırı zaten her
+       turda gerçek tarayıcıyla görülüyor. -->
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- Veritabanına dokunan testler için: şema modelden kurulur
+         (`EnsureCreated`), benzersiz dizin dahil. `InMemory` sağlayıcısı dizin
+         ZORLAMAZ — ad tekliğini onunla sınamak kuralın kendisini atlamak olurdu. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Alp.Api\Alp.Api.csproj" />
+    <ProjectReference Include="..\Alp.Data\Alp.Data.csproj" />
+    <ProjectReference Include="..\Alp.Domain\Alp.Domain.csproj" />
+    <ProjectReference Include="..\Alp.Reports\Alp.Reports.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

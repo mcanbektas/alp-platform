@@ -7,12 +7,15 @@ WORKDIR /src
 
 # Önce yalnızca proje dosyaları kopyalanır: kaynak değişip bağımlılık
 # değişmediğinde restore katmanı önbellekten gelir.
-COPY api/Alp.Api.sln ./
 COPY api/Alp.Domain/Alp.Domain.csproj Alp.Domain/
 COPY api/Alp.Data/Alp.Data.csproj Alp.Data/
 COPY api/Alp.Reports/Alp.Reports.csproj Alp.Reports/
 COPY api/Alp.Api/Alp.Api.csproj Alp.Api/
-RUN dotnet restore Alp.Api.sln
+# Çözüm dosyası DEĞİL, uygulama projesi geri yüklenir. Çözüm test projesini de
+# sayıyor; onu geri yüklemek imaja xunit ve SQLite paketlerini sokar (ve dosyası
+# kopyalanmadığı için derleme baştan patlar). Proje geçişli olarak Domain/Data/
+# Reports'u da getirir, yani aşağıdaki `--no-restore` yayını için yeterli.
+RUN dotnet restore Alp.Api/Alp.Api.csproj
 
 COPY api/ ./
 RUN dotnet publish Alp.Api/Alp.Api.csproj -c Release -o /app/publish --no-restore

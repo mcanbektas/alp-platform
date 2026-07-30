@@ -81,7 +81,7 @@ public static class ProjectEndpoints
             new ProjectSummary(project.Id, project.Name, project.Description, project.CreatedAt, project.UpdatedAt, 0));
     }
 
-    private static async Task<IResult> GetProject(Guid id, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> GetProject(Guid id, AppDbContext db, HttpContext http)
     {
         var (owned, error) = await LoadOwnedProject(db, http, id);
         if (error is not null) return error;
@@ -113,7 +113,7 @@ public static class ProjectEndpoints
             project.Id, project.Name, project.Description, project.CreatedAt, project.UpdatedAt, calculations));
     }
 
-    private static async Task<IResult> UpdateProject(Guid id, UpdateProjectRequest req, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> UpdateProject(Guid id, UpdateProjectRequest req, AppDbContext db, HttpContext http)
     {
         // `LoadOwnedProject` `Include(Calculations)` yapmaz: eskiden yalnızca
         // dönüş yükündeki `Count` için tüm hesapları (ReportJson'larıyla, gömülü
@@ -148,7 +148,7 @@ public static class ProjectEndpoints
             project.Id, project.Name, project.Description, project.CreatedAt, project.UpdatedAt, calculationCount));
     }
 
-    private static async Task<IResult> DeleteProject(Guid id, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> DeleteProject(Guid id, AppDbContext db, HttpContext http)
     {
         var (project, error) = await LoadOwnedProject(db, http, id);
         if (error is not null) return error;
@@ -161,7 +161,7 @@ public static class ProjectEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> CreateCalculation(Guid id, CreateCalculationRequest req, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> CreateCalculation(Guid id, CreateCalculationRequest req, AppDbContext db, HttpContext http)
     {
         var (project, error) = await LoadOwnedProject(db, http, id);
         if (error is not null) return error;
@@ -208,7 +208,7 @@ public static class ProjectEndpoints
     // Proje detayı üzerinden de okunabilirdi ama araç ekranı yalnızca `?hesap=`
     // parametresindeki kimliği bilir — üst projeyi bilmediği için o yolu
     // kullanamaz. Sahiplik yine Project.UserId üzerinden doğrulanır.
-    private static async Task<IResult> GetCalculation(Guid id, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> GetCalculation(Guid id, AppDbContext db, HttpContext http)
     {
         var (calculation, error) = await LoadOwnedCalculation(db, http, id);
         if (error is not null) return error;
@@ -217,7 +217,7 @@ public static class ProjectEndpoints
             ToDto(calculation!), calculation!.Project!.Id, calculation.Project.Name));
     }
 
-    private static async Task<IResult> UpdateCalculation(Guid id, UpdateCalculationRequest req, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> UpdateCalculation(Guid id, UpdateCalculationRequest req, AppDbContext db, HttpContext http)
     {
         var (calculation, error) = await LoadOwnedCalculation(db, http, id);
         if (error is not null) return error;
@@ -256,7 +256,7 @@ public static class ProjectEndpoints
         return Results.Ok(ToDto(calculation!));
     }
 
-    private static async Task<IResult> DeleteCalculation(Guid id, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> DeleteCalculation(Guid id, AppDbContext db, HttpContext http)
     {
         var (calculation, error) = await LoadOwnedCalculation(db, http, id);
         if (error is not null) return error;

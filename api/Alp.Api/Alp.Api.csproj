@@ -7,6 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Uç işleyicileri `internal`: test onları HTTP yığınını kurmadan doğrudan
+         çağırır. `public` yapılmadı — dışarıya açık yüzey yalnızca rotalardır. -->
+    <InternalsVisibleTo Include="Alp.Api.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.9" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.9" />

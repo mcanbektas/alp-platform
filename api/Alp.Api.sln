@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Alp.Reports", "Alp.Reports\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Alp.Api", "Alp.Api\Alp.Api.csproj", "{8AEEF8D6-C3E5-43F2-8140-F191463F3181}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Alp.Api.Tests", "Alp.Api.Tests\Alp.Api.Tests.csproj", "{37C159AC-13CB-4323-AA40-A4DCFACDC55D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -36,5 +38,9 @@ Global
 		{8AEEF8D6-C3E5-43F2-8140-F191463F3181}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8AEEF8D6-C3E5-43F2-8140-F191463F3181}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8AEEF8D6-C3E5-43F2-8140-F191463F3181}.Release|Any CPU.Build.0 = Release|Any CPU
+		{37C159AC-13CB-4323-AA40-A4DCFACDC55D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{37C159AC-13CB-4323-AA40-A4DCFACDC55D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{37C159AC-13CB-4323-AA40-A4DCFACDC55D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{37C159AC-13CB-4323-AA40-A4DCFACDC55D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -500,7 +500,7 @@ public static class AuthEndpoints
     private static readonly byte[] PngMagic = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     private static readonly byte[] JpegMagic = [0xFF, 0xD8, 0xFF];
 
-    private static string? DetectImageType(byte[] bytes)
+    internal static string? DetectImageType(byte[] bytes)
     {
         if (bytes.Length > PngMagic.Length && bytes.AsSpan(0, PngMagic.Length).SequenceEqual(PngMagic)) return "image/png";
         if (bytes.Length > JpegMagic.Length && bytes.AsSpan(0, JpegMagic.Length).SequenceEqual(JpegMagic)) return "image/jpeg";

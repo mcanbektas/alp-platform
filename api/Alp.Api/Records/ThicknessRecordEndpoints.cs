@@ -37,7 +37,7 @@ public static class ThicknessRecordEndpoints
         group.MapDelete("/{id:guid}", DeleteRecord).RequireRateLimiting("writes");
     }
 
-    private static async Task<IResult> ListRecords(AppDbContext db, HttpContext http)
+    internal static async Task<IResult> ListRecords(AppDbContext db, HttpContext http)
     {
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
@@ -58,7 +58,7 @@ public static class ThicknessRecordEndpoints
     // Karşılaştırma Türkçe kurallarına göre küçük harfe indirgenmiş ad üzerinden
     // yapılır — istemcideki `recordId` ile aynı: "Üst Katman" ile "üst katman"
     // aynı kayıt, "Ust katman" ayrı kayıt.
-    private static async Task<IResult> SaveRecord(
+    internal static async Task<IResult> SaveRecord(
         SaveThicknessRecordRequest req, AppDbContext db, HttpContext http)
     {
         var userId = CurrentUserId(http);
@@ -126,7 +126,7 @@ public static class ThicknessRecordEndpoints
         return Results.Ok(new ThicknessRecordDto(match.Id, match.Name, match.SchemaVersion, match.DataJson, match.CreatedAt));
     }
 
-    private static async Task<IResult> DeleteRecord(Guid id, AppDbContext db, HttpContext http)
+    internal static async Task<IResult> DeleteRecord(Guid id, AppDbContext db, HttpContext http)
     {
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
