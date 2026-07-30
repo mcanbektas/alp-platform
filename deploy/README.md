@@ -12,6 +12,11 @@ Plan: `docs/uyelik-ve-rapor-plani.md` §7.
 | `.env.example` | Ortam değişkeni şablonu. Kopyası `.env` **depoya girmez**. |
 | `backup.sh` | Günlük `pg_dump` + saklama + sunucu dışına kopya. |
 
+**Yazı tipleri.** api imajı rapor yazı tiplerini `assets/report-fonts/` dizininden
+`/app/fonts` altına alır ve `Reports__FontsPath` oraya bakar (`docker-compose.yml`).
+Dizin boş kalırsa PDF konteyner tabanındaki `fonts-dejavu-core`'a düşer; api açılışta
+bunu uyarı olarak basar, doğrulama listesindeki günlük taraması onu yakalar.
+
 ---
 
 ## Yerelde çalıştırma
@@ -208,10 +213,6 @@ düşerse site ilk açılışta çalışır, **sayfa yenilendiğinde 404 verir**
 
 ## Bilinen eksikler
 
-- **Yazı tipleri (Faz 3b).** `web/public/fonts/` boş. Konteyner tabanına
-  `fonts-dejavu-core` kuruluyor, PDF ona düşüyor; sitenin kendi yazı tipleri
-  gelince `api/Dockerfile` içine kopyalanıp `Reports__FontsPath=/app/fonts`
-  ile devreye girer.
 - **Migration açılışta uygulanır** (`Database__MigrateOnStartup=true`). Tek
   kopyalı dağıtımda doğru; api birden çok kopyaya çıkarsa kapatılıp ayrı bir
   migration adımına taşınır.

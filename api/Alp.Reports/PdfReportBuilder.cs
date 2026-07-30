@@ -341,9 +341,11 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
 
 public static class ReportFonts
 {
-    // Faz 3b tamamlanınca web/public/fonts/ altındaki dosyalar aynı
-    // dizinden PDF'e de gömülecek — tek kaynak. O ana kadar dizin yoksa
-    // sessizce atlanır, QuestPDF platform yazı tipine düşer.
+    // Faz 3b: ekranın kullandığı üç ailenin tam kapsamlı ttf sürümleri
+    // (`assets/report-fonts/`) PDF'e gömülür, böylece belge ekranla aynı yazı
+    // tipini gösterir. Yalnız `*.ttf` okunur — sitenin woff2 alt kümelerini
+    // çizim katmanı çözemez. Dizin yoksa sessizce atlanır, QuestPDF platform
+    // yazı tipine düşer.
     /// <returns>Kaydedilen yazı tipi dosyası sayısı — sıfır, platform yazı tipine
     /// düşüleceği anlamına gelir. Çağıran bunu üretimde uyarı olarak basar:
     /// konteyner tabanı Debian'da sistem yazı tipi yoktur, sessizce düşülürse

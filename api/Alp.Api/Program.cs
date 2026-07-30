@@ -249,10 +249,11 @@ if (builder.Configuration.GetValue("Database:MigrateOnStartup", false))
     await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
 }
 
-// Faz 3b tamamlanınca web/public/fonts/ altına gerçek dosyalar konacak; o ana
-// kadar dizin yok, sessizce atlanır (PdfReportBuilder platform yazı tipine düşer).
+// Rapor yazı tipleri (Faz 3b). Konteynerde yol `Reports__FontsPath` ile verilir
+// (/app/fonts, bkz. api/Dockerfile); yerelde depodaki dizin kullanılır. Dizin
+// yoksa sessizce atlanır ve PdfReportBuilder platform yazı tipine düşer.
 var fontsPath = builder.Configuration["Reports:FontsPath"]
-    ?? Path.Combine(builder.Environment.ContentRootPath, "..", "..", "web", "public", "fonts");
+    ?? Path.Combine(builder.Environment.ContentRootPath, "..", "..", "assets", "report-fonts");
 var registeredFonts = ReportFonts.RegisterIfAvailable(fontsPath);
 if (!smtp.IsConfigured && !app.Environment.IsDevelopment())
 {

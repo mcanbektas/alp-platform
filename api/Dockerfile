@@ -37,11 +37,13 @@ COPY --from=build /app/publish ./
 # açılıp devredilir.
 RUN mkdir -p /app/App_Data /app/fonts && chown -R app:app /app/App_Data /app/fonts
 
-# Rapor yazı tipleri (Faz 3b). Kaynak, sitenin kullandığı dizinin TA KENDİSİ —
-# ekran ile belge aynı aileleri göstersin diye tek kopya tutulur. Yalnız ttf
-# kopyalanır: `ReportFonts.RegisterIfAvailable` woff2 okumaz (çizim katmanı
-# çözemez), site tarafı zaten woff2 sürümlerini kullanır.
-COPY --chown=app:app web/public/fonts/*.ttf /app/fonts/
+# Rapor yazı tipleri (Faz 3b). Kaynak `assets/report-fonts/`: aynı üç aile,
+# tam kapsamlı ttf sürümleri. Site tarafı woff2 alt kümelerini kullanır
+# (`web/public/fonts/`) ve `ReportFonts.RegisterIfAvailable` woff2 okumaz —
+# çizim katmanı çözemez. Bu yüzden ttf'ler `web/public/` altında DURMAZ: orada
+# olsalar tarayıcı hiç indirmediği hâlde `dist/`e ve web imajına girerlerdi.
+# Lisans metni fontun baytıyla birlikte taşınır (SIL OFL 1.1 şartı).
+COPY --chown=app:app assets/report-fonts/*.ttf assets/report-fonts/OFL-*.txt /app/fonts/
 
 USER app
 EXPOSE 8080
