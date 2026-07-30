@@ -44,6 +44,11 @@ public static class AuthEndpoints
 
         me.MapGet("/", Me);
         me.MapPatch("/", UpdateMe).RequireRateLimiting("writes").LimitBodySize(AuthBodyLimitBytes);
+        // Parola değiştirme profil güncellemesiyle aynı yüzeyde ama kendi
+        // sınırında: mevcut parola üzerinde deneme yapılmasına açık olduğu için
+        // "writes" yetmez, "auth" ise IP başına ve login'le ortak olduğundan
+        // meşru kullanıcıyı kilitlerdi (gerekçe: Program.cs, "password").
+        me.MapPost("/password", ChangePassword).RequireRateLimiting("password").LimitBodySize(AuthBodyLimitBytes);
     }
 
     // appsettings.json anahtarı boş dize olarak commit edilir (gizli değer
@@ -413,6 +418,62 @@ public static class AuthEndpoints
         if (!result.Succeeded) return Results.BadRequest(new ApiError("UPDATE_FAILED"));
 
         return Results.Ok(ToMeResponse(user));
+    }
+
+    // Parola değiştirme. `ResetPassword` ile aynı iki adımı yapar — parolayı
+    // yazar, sonra o kullanıcının BÜTÜN yenileme token'larını iptal eder —
+    // ama bir farkla: burada oturumu değiştiren kişi kullanıcının kendisidir
+    // ve o an açık olan sekmesi vardır. Bu yüzden iptalin ardından bu oturum
+    // için yeni bir token basılır: diğer bütün cihazlar düşer, kullanıcı
+    // kendi ekranında kalır. Aksi hâlde "parolamı değiştirdim" eylemi
+    // kullanıcıyı kendi oturumundan da atardı.
+    private static async Task<IResult> ChangePassword(
+        ChangePasswordRequest req,
+        UserManager<ApplicationUser> userManager,
+        ITokenService tokenService,
+        AppDbContext db,
+        HttpContext http,
+        IWebHostEnvironment env)
+    {
+        if (string.IsNullOrWhiteSpace(req.CurrentPassword) || string.IsNullOrWhiteSpace(req.NewPassword))
+        {
+            return Results.BadRequest(new ApiError("MISSING_FIELDS"));
+        }
+
+        var user = await CurrentUser(userManager, http);
+        if (user is null)
+        {
+            return Results.Json(new ApiError("UNAUTHORIZED"), statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        // Mevcut parolayı da Identity doğrular; yanlışsa `PasswordMismatch`
+        // koduyla döner ve parola politikası hataları aynı zarfla taşınır.
+        var result = await userManager.ChangePasswordAsync(user, req.CurrentPassword, req.NewPassword);
+        if (!result.Succeeded)
+        {
+            return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes = result.Errors.Select(e => e.Code) }));
+        }
+
+        // "Beni kaydet" seçimi bu oturumun mevcut token'ından okunur: yeni
+        // token onu taşımazsa oturum çerezi sessizce kalıcıya (ya da tersi)
+        // döner — Refresh'teki `Persistent` aktarımıyla aynı gerekçe.
+        var persistent = false;
+        if (http.Request.Cookies.TryGetValue(RefreshCookieName, out var rawCookie)
+            && !string.IsNullOrEmpty(rawCookie))
+        {
+            var hash = tokenService.Hash(rawCookie);
+            persistent = await db.RefreshTokens
+                .Where(t => t.TokenHash == hash)
+                .Select(t => t.Persistent)
+                .FirstOrDefaultAsync();
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        await db.RefreshTokens
+            .Where(t => t.UserId == user.Id && t.RevokedAt == null)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.RevokedAt, now));
+
+        return await IssueSession(user, tokenService, db, http, env, persistent);
     }
 
     private const int DisplayNameMax = 80;

@@ -134,6 +134,26 @@ builder.Services.AddRateLimiter(opt =>
             QueueLimit = 0,
         }));
 
+    // password — oturum açmış kullanıcının kendi parolasını değiştirmesi.
+    //
+    // "auth" kovasına konmadı ve konulmamalı: orası IP başınadır ve 5 dakikada
+    // 10 istekle login/register/forgot ile PAYLAŞILIR. NAT arkasındaki bir
+    // ofiste meslektaşların girişleri kotayı bitirir ve parola değiştirmek
+    // 429 alırdı — `logout` politikasının doğduğu arızanın aynısı.
+    //
+    // Buradaki uç kimlik doğrulamalı olduğu için kova KULLANICI başına
+    // kurulabiliyor, ki asıl tehdide de doğru cevap bu: sınırın işi, çalınmış
+    // bir erişim token'ıyla mevcut parolayı deneyen birini durdurmak. Kullanıcı
+    // başına 5 deneme / 15 dakika kaba kuvveti kapatır, meşru kullanıcı ise
+    // parolasını zaten günde bir kez değiştirmez.
+    opt.AddPolicy("password", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        UserKey(ctx), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 5,
+            Window = TimeSpan.FromMinutes(15),
+            QueueLimit = 0,
+        }));
+
     // refresh — her sayfa yüklemesinde sessizce çağrılır (AuthProvider açılışta
     // yeniler), meşru trafik "auth" politikasından çok daha sık gerçekleşir.
     //

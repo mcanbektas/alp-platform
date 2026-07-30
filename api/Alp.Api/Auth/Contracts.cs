@@ -5,6 +5,10 @@ public record RegisterRequest(string Email, string Password, string DisplayName)
 // tarayıcı kapanınca biter. Eski istemci gövdesi bu yüzden kırılmaz.
 public record LoginRequest(string Email, string Password, bool RememberMe = false);
 public record ForgotPasswordRequest(string Email);
+// Oturum açmış kullanıcının kendi parolasını değiştirmesi. Mevcut parola
+// ZORUNLUDUR: erişim token'ı ele geçirilmiş bir oturum, parolayı da
+// değiştirip hesabı büsbütün devralamasın diye.
+public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record ResetPasswordRequest(string Email, string Token, string NewPassword);
 
 public record LoginResponse(string AccessToken, DateTimeOffset ExpiresAt);
