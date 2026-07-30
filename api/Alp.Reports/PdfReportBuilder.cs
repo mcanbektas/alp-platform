@@ -276,6 +276,23 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
     /// </remarks>
     private bool TryRenderSvg(ColumnDescriptor fig, string svg, string kind, bool full)
     {
+        // Boyutsuz SVG çizime HİÇ verilmez. Bu bir biçim tercihi değil,
+        // dayanıklılık sınırı: `viewBox` ve `width`/`height` yokken çizim
+        // katmanı çözümü bulamıyor ve hata fırlatmak yerine dönüyor —
+        // istek yanıtsız kalırken işlem bir çekirdeği doldurup belleği
+        // gigabaytlarca şişiriyor (yerel ölçüm: %248 CPU, 7 GB, yanıt yok).
+        //
+        // Kimlik doğrulamalı bir kullanıcı kendi rapor bölümünü kaydedebildiği
+        // için bu tek istekle sunucuyu düşürmeye yeterdi. Uygulamanın kendi
+        // ürettiği çizimlerde `viewBox` her zaman var; kaybedilen bir şey yok.
+        if (!HasIntrinsicSize(svg))
+        {
+            onSvgError?.Invoke(
+                $"{kind} SVG'si boyut bilgisi taşımıyor (viewBox/width+height yok), çizilmedi: "
+                + svg[..Math.Min(300, svg.Length)]);
+            return false;
+        }
+
         try
         {
             if (full) fig.Item().Svg(svg);
@@ -292,6 +309,25 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                 + svg[..Math.Min(600, svg.Length)]);
             return false;
         }
+    }
+
+    // `<svg>` açılış etiketinde viewBox ya da width+height var mı? Ayrıştırıcı
+    // değil, kapı: geçerli bir SVG'yi elemek değil, boyutsuz olanı çizime
+    // sokmamak amaç. Bu yüzden yalnız ilk etikete bakılır ve şüpheli her şey
+    // reddedilir.
+    private static bool HasIntrinsicSize(string svg)
+    {
+        var open = svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+        if (open < 0) return false;
+
+        var close = svg.IndexOf('>', open);
+        if (close < 0) return false;
+
+        var tag = svg[open..close];
+        if (tag.Contains("viewBox=", StringComparison.OrdinalIgnoreCase)) return true;
+
+        return tag.Contains("width=", StringComparison.OrdinalIgnoreCase)
+            && tag.Contains("height=", StringComparison.OrdinalIgnoreCase);
     }
 }
 
