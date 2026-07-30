@@ -323,6 +323,15 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
     // değil, kapı: geçerli bir SVG'yi elemek değil, boyutsuz olanı çizime
     // sokmamak amaç. Bu yüzden yalnız ilk etikete bakılır ve şüpheli her şey
     // reddedilir.
+    //
+    // Öznitelik adları TAM harf büyüklüğüyle aranır (`Ordinal`), çünkü SVG bir
+    // XML lehçesidir ve öznitelik adları harf duyarlıdır: `VIEWBOX` diye bir
+    // öznitelik yoktur. Arama harf duyarsız olduğunda `<svg VIEWBOX="0 0 100 40">`
+    // kapıdan geçiyordu ve çizim katmanı onu boyutsuz görüp bütün belgeyi düzen
+    // hatasına düşürüyordu — kullanıcıya "rapor çok büyük" (422) diyen, sebebi
+    // yanlış söyleyen bir yanıt. Tam eşleşmeyle o SVG burada elenir: yalnız o
+    // çizim atlanır, notu düşer, rapor üretilir. Etiket adı yine harf duyarsız
+    // aranır; amaç etiketi BULMAK, geçerliliğine karar vermek değil.
     private static bool HasIntrinsicSize(string svg)
     {
         var open = svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
@@ -332,10 +341,10 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
         if (close < 0) return false;
 
         var tag = svg[open..close];
-        if (tag.Contains("viewBox=", StringComparison.OrdinalIgnoreCase)) return true;
+        if (tag.Contains("viewBox=", StringComparison.Ordinal)) return true;
 
-        return tag.Contains("width=", StringComparison.OrdinalIgnoreCase)
-            && tag.Contains("height=", StringComparison.OrdinalIgnoreCase);
+        return tag.Contains("width=", StringComparison.Ordinal)
+            && tag.Contains("height=", StringComparison.Ordinal);
     }
 }
 

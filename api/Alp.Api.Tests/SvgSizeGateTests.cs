@@ -93,6 +93,24 @@ public class SvgSizeGateTests
         Assert.Contains("boyut bilgisi taşımıyor", message);
     }
 
+    [Theory]
+    // SVG bir XML lehçesidir ve öznitelik adları HARF DUYARLIDIR: `VIEWBOX` diye
+    // bir öznitelik yok. Kapı harf duyarsız ararken bunlar geçiyordu; çizim
+    // katmanı onları boyutsuz görüp BÜTÜN belgeyi düzen hatasına düşürüyordu,
+    // yani kullanıcı tek bozuk öznitelik yüzünden "rapor çok büyük" (422)
+    // görüyordu. Artık burada eleniyor: yalnız o çizim atlanır.
+    [InlineData("<svg xmlns=\"http://www.w3.org/2000/svg\" VIEWBOX=\"0 0 100 40\"><rect /></svg>")]
+    [InlineData("<svg xmlns=\"http://www.w3.org/2000/svg\" viewbox=\"0 0 100 40\"><rect /></svg>")]
+    [InlineData("<svg xmlns=\"http://www.w3.org/2000/svg\" WIDTH=\"100\" HEIGHT=\"40\"><rect /></svg>")]
+    [InlineData("<SVG VIEWBOX=\"0 0 100 40\" xmlns=\"http://www.w3.org/2000/svg\"><rect /></SVG>")]
+    public void Yanlis_harf_buyuklugundeki_boyut_ozniteligi_kabul_edilmez(string svg)
+    {
+        var (pdf, errors) = Build(svg);
+
+        Assert.NotEmpty(pdf);
+        Assert.Contains("boyut bilgisi taşımıyor", Assert.Single(errors));
+    }
+
     [Fact]
     public void Bildirimde_bozuk_parcanin_basi_yer_alir()
     {
