@@ -57,7 +57,8 @@ services:
       # bütün istekler tek IP'ye düşer (hız sınırı tek kova olur).
       App__KnownProxyNetworks__0: ${PROXY_NETWORK:-172.28.0.0/16}
       Database__MigrateOnStartup: "true"
-      Storage__ReportsPath: /app/App_Data/reports
+      # Üretilen rapor için depolama ayarı yoktur: belge diske yazılmaz, "tekrar
+      # indir" kaydedilmiş hesaplardan yeniden üretir.
       # Kalıcı volume: anahtarlar konteynerle birlikte silinirse o an postası
       # yolda olan doğrulama/parola sıfırlama bağlantıları geçersizleşir.
       DataProtection__KeysPath: /app/App_Data/keys
@@ -90,6 +91,10 @@ services:
 
 volumes:
   pgdata:
+  # Ad tarihsel: bu volume artık rapor DOSYASI tutmuyor (raporlar saklanmıyor),
+  # yalnızca /app/App_Data/keys altındaki Data Protection anahtarlarını taşıyor.
+  # Yeniden adlandırılmadı: adı değiştirmek yeni ve BOŞ bir volume demek olur,
+  # yani o an postası yolda olan doğrulama bağlantılarının geçersizleşmesi.
   reports:
 
 networks:

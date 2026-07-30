@@ -22,7 +22,10 @@ public class Report
     public int Revision { get; set; } = 1;
     public ReportFormat Format { get; set; }
 
-    public string FilePath { get; set; } = string.Empty;
+    // Üretilen belge diske yazılmaz, bu yüzden dosya YOLU da yoktur: "tekrar
+    // indir" kayıttan yeniden üretmek demektir (bkz. ReportEndpoints saklama
+    // notu). `FileSize` kütük değeridir — kullanıcı ne kadar rapor üretti,
+    // hangi boyutta.
     public long FileSize { get; set; }
     public DateTimeOffset GeneratedAt { get; set; }
 }

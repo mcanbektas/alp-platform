@@ -1,4 +1,5 @@
 using QuestPDF.Drawing;
+using QuestPDF.Drawing.Exceptions;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -33,7 +34,24 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
     private const string FontBody = "IBM Plex Sans";
     private const string FontMono = "IBM Plex Mono";
 
+    // QuestPDF, içeriği sayfa kısıtlarına sığdıramadığında `GeneratePdf()`
+    // sırasında `DocumentLayoutException` fırlatır — yükün kendisi geçerli
+    // olsa bile (5000 satırlık bir proje raporu canlı sunucuda bunu tetikledi).
+    // Sarmalanmadığında bu işlenmemiş bir 500 oluyordu; `ReportLayoutException`
+    // olarak dışarı verilir ve uç nokta onu temiz bir hata koduna çevirir.
     public byte[] Build(ReportPayload payload)
+    {
+        try
+        {
+            return Compose(payload).GeneratePdf();
+        }
+        catch (DocumentLayoutException ex)
+        {
+            throw new ReportLayoutException(ex);
+        }
+    }
+
+    private Document Compose(ReportPayload payload)
     {
         var green = Color.FromHex(Green);
         var ink = Color.FromHex(Ink);
@@ -99,7 +117,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                     }
                 });
             });
-        }).GeneratePdf();
+        });
     }
 
     // Statik DEĞİL: SVG çözülemediğinde örnek üzerindeki `onSvgError` geri

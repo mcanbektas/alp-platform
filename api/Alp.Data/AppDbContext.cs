@@ -48,8 +48,10 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         {
             e.HasIndex(r => r.ProjectId);
             e.HasIndex(r => r.UserId);
-            // Proje silinirse rapor kaydı silinmez, yalnızca bağı kopar —
-            // kullanıcı daha önce ürettiği belgeyi yine indirebilmeli.
+            // Proje silinirse rapor kaydı silinmez, yalnızca bağı kopar: kütük
+            // (kim, ne zaman, hangi biçim) kalır. Belgenin kendisi saklanmadığı
+            // için o rapor artık YENİDEN ÜRETİLEMEZ — indirme ucu bu durumda
+            // `REPORT_NOT_REPRODUCIBLE` döner, sessizce boş dosya vermez.
             // Hesap silinirse (User->Report ayrı bir ilişki değil, aşağıdaki
             // AspNetUsers FK'sı) gerçek silme uygulanır, bkz. sınıf üstü not.
             e.HasOne(r => r.Project).WithMany().HasForeignKey(r => r.ProjectId).OnDelete(DeleteBehavior.SetNull);

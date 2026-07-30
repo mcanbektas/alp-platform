@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using Alp.Api.Auth;
+using Alp.Api.Common;
 using Alp.Api.Projects;
 using Alp.Api.Reports;
 using Alp.Data;
@@ -8,6 +9,7 @@ using Alp.Domain;
 using Alp.Reports;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
@@ -190,8 +192,8 @@ builder.Services.AddCors(opt =>
 // docs/uyelik-ve-rapor-plani.md §5, §12 (Faz 1 risk denemesinde doğrulandı).
 QuestPDF.Settings.License = LicenseType.Community;
 
-builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection(StorageOptions.SectionName));
-
+// Üretilen belge için depolama ayarı YOKTUR: rapor diske yazılmaz, "tekrar
+// indir" kaydedilmiş hesaplardan yeniden üretir (bkz. ReportEndpoints).
 // ---- Data Protection ----
 // Identity'nin e-posta doğrulama ve parola sıfırlama jetonları bu anahtarlarla
 // korunur. Varsayılan konum konteynerin kendi dosya sistemidir (~/.aspnet):
@@ -256,6 +258,30 @@ if (registeredFonts == 0 && !app.Environment.IsDevelopment())
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+}
+else
+{
+    // Üretimde işlenmemiş bir istisna çıplak 500 döndürüyordu: gövdesi boş,
+    // istemci tarafında `API_ERR_PARSE`'a düşen bir yanıt. Ortam `Development`
+    // olmadığı için yığın izi sızmıyordu, ama arayüz hatayı diğer uçlarla aynı
+    // sözleşmeden okuyamıyordu. Burada hem tek biçimli `{ error }` gövdesi
+    // yazılır hem de kayıt garanti altına alınır.
+    //
+    // Geliştirmede bilinçli olarak KAPALI: orada geliştirici istisna sayfası
+    // (yığın izi dahil) daha yararlıdır.
+    app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
+    {
+        var feature = context.Features.Get<IExceptionHandlerFeature>();
+        app.Logger.LogError(
+            feature?.Error,
+            "İşlenmemiş istisna: {Method} {Path}",
+            context.Request.Method,
+            feature?.Path ?? context.Request.Path.Value);
+
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsJsonAsync(new ApiError("SERVER_ERROR"));
+    }));
 }
 
 // Ters vekil arkasında gerçek istemci IP'sini görebilmek için (hız sınırı ve

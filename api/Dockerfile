@@ -31,9 +31,11 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /app/publish ./
 
-# Raporlar kalıcı volume'a yazılır; imajdaki `app` kullanıcısı (UID 1654,
-# aspnet imajıyla gelir) yazabilsin diye dizin önceden açılıp devredilir.
-RUN mkdir -p /app/App_Data/reports /app/fonts && chown -R app:app /app/App_Data /app/fonts
+# /app/App_Data kalıcı volume'a bağlanır ve Data Protection anahtarlarını
+# taşır (raporlar saklanmıyor, diske yazılan belge yok). İmajdaki `app`
+# kullanıcısı (UID 1654, aspnet imajıyla gelir) yazabilsin diye dizin önceden
+# açılıp devredilir.
+RUN mkdir -p /app/App_Data /app/fonts && chown -R app:app /app/App_Data /app/fonts
 
 # Faz 3b'de web/public/fonts dolduğunda buraya kopyalanır ve
 # Reports__FontsPath=/app/fonts ile devreye girer. Dizin şimdilik boş.

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Alp.Api.Common;
 using Alp.Api.Http;
 using Alp.Data;
@@ -7,7 +8,6 @@ using Alp.Domain;
 using Alp.Reports;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 
 namespace Alp.Api.Reports;
 
@@ -16,6 +16,22 @@ public static class ReportEndpoints
     // §4.4: "Rapor yükü boyut sınırı (varsayılan 5 MB); SVG dizeleri şişebilir."
     private const long ReportBodyLimitBytes = 5 * 1024 * 1024;
 
+    // ---- Saklama politikası: üretilen belge diske YAZILMAZ ----
+    //
+    // Karar (2026-07-30, kullanıcı): rapor dosyası sunucuda tutulmaz. Gerekçe
+    // ve alternatifler docs/kod-incelemesi-2026-07-29.md "Üretilen rapor
+    // dosyalarında saklama sınırı yok" maddesinde: dosya tutan her seçenek
+    // temizlik görevi ya da kota gerektiriyordu (tek kullanıcı hız sınırının
+    // izin verdiği tempoda günde ~290 MB üretebiliyor).
+    //
+    // Rapor türetilmiş veridir: kaynağı kaydedilmiş hesapların `ReportJson`
+    // bölümleridir ve onlar veritabanında zaten duruyor. Bu yüzden "tekrar
+    // indir" bir dosya kopyası değil, kayıttan YENİDEN ÜRETİMDİR (bkz.
+    // Download). `Reports` tablosu kütük olarak kalır: hangi rapor, kim,
+    // ne zaman, kaç bayt.
+    //
+    // Bunun kabul edilen sınırı: projeye kaydedilmemiş tek seferlik bir rapor
+    // geri getirilemez — o ekranın verisi hiçbir yerde durmuyor.
     public static void MapReportEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/reports").RequireAuthorization();
@@ -23,7 +39,9 @@ public static class ReportEndpoints
         group.MapPost("/pdf", GeneratePdf).RequireRateLimiting("reports").LimitBodySize(ReportBodyLimitBytes);
         group.MapPost("/xlsx", GenerateXlsx).RequireRateLimiting("reports").LimitBodySize(ReportBodyLimitBytes);
         group.MapGet("/", ListReports);
-        group.MapGet("/{id:guid}/download", Download);
+        // İndirme artık dizgiyi yeniden koşuyor, diskten okumuyor: üretim
+        // uçlarıyla aynı kovaya girer, yoksa ücretsiz bir CPU musluğu olurdu.
+        group.MapGet("/{id:guid}/download", Download).RequireRateLimiting("reports");
     }
 
     private static async Task<IResult> GeneratePdf(
@@ -31,8 +49,7 @@ public static class ReportEndpoints
         [FromQuery] Guid? projectId,
         PdfReportBuilder builder,
         AppDbContext db,
-        HttpContext http,
-        IOptions<StorageOptions> storage)
+        HttpContext http)
     {
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
@@ -47,10 +64,24 @@ public static class ReportEndpoints
             if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
         }
 
-        var bytes = builder.Build(payload);
-        var record = await Persist(db, storage.Value, userId, payload, ReportFormat.Pdf, bytes, "pdf", projectId);
+        byte[] bytes;
+        try
+        {
+            bytes = builder.Build(payload);
+        }
+        catch (ReportLayoutException)
+        {
+            // Yük geçerli ama içerik sayfa düzenine sığmıyor (çok bölümlü,
+            // grafikli proje raporu). Bu bir sunucu arızası değil, girdinin
+            // sınırı — 500 değil 422 döner ve arayüz bunu okunur bir cümleye
+            // çevirir. Excel aynı yükü kaldırdığı için kullanıcıya kalan yol
+            // Excel indirmektir.
+            return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
+        }
 
-        return Results.File(bytes, "application/pdf", DownloadName(payload, projectName, record, "pdf"));
+        var record = await LogReport(db, userId, payload, ReportFormat.Pdf, bytes, projectId);
+
+        return Results.File(bytes, PdfContentType, DownloadName(payload, projectName, record, "pdf"));
     }
 
     private static async Task<IResult> GenerateXlsx(
@@ -58,8 +89,7 @@ public static class ReportEndpoints
         [FromQuery] Guid? projectId,
         XlsxReportBuilder builder,
         AppDbContext db,
-        HttpContext http,
-        IOptions<StorageOptions> storage)
+        HttpContext http)
     {
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
@@ -75,11 +105,9 @@ public static class ReportEndpoints
         }
 
         var bytes = builder.Build(payload);
-        var record = await Persist(db, storage.Value, userId, payload, ReportFormat.Xlsx, bytes, "xlsx", projectId);
+        var record = await LogReport(db, userId, payload, ReportFormat.Xlsx, bytes, projectId);
 
-        const string xlsxContentType =
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-        return Results.File(bytes, xlsxContentType, DownloadName(payload, projectName, record, "xlsx"));
+        return Results.File(bytes, XlsxContentType, DownloadName(payload, projectName, record, "xlsx"));
     }
 
     // Var olmayan ve başkasına ait proje AYNI 404'ü verir — anti-enumeration
@@ -108,30 +136,135 @@ public static class ReportEndpoints
         return Results.Ok(reports);
     }
 
-    private static async Task<IResult> Download(Guid id, AppDbContext db, HttpContext http, IOptions<StorageOptions> storage)
+    // ---- Geçmişten indirme = kayıttan yeniden üretim ----
+    //
+    // Dosya saklanmadığı için (bkz. MapReportEndpoints üstündeki not) burada
+    // diskten okunacak bir şey yok: rapor, projedeki hesapların kaydedilmiş
+    // `ReportJson` bölümlerinden yeniden dizilir. Bölümler istemcinin gönderdiği
+    // hâlleriyle (SVG dahil) duruyor, yani belge içerik olarak aynı çıkar.
+    //
+    // Bilinçli iki fark:
+    //   - Belgenin tarihi ilk üretimin günüdür (`GeneratedAt`), yeniden basma
+    //     günü değil. İndirilen belge "o gün alınmış rapor" olarak okunur.
+    //   - Proje o günden beri değiştiyse rapor GÜNCEL hâli gösterir; anlık
+    //     görüntü saklanmıyor. Değişmemiş bir projede sonuç birebir aynıdır.
+    private static async Task<IResult> Download(
+        Guid id,
+        AppDbContext db,
+        HttpContext http,
+        PdfReportBuilder pdf,
+        XlsxReportBuilder xlsx)
     {
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
 
-        var report = await db.Reports.FirstOrDefaultAsync(r => r.Id == id);
+        var report = await db.Reports
+            .Where(r => r.Id == id)
+            .Select(r => new
+            {
+                r.UserId,
+                r.ProjectId,
+                r.Title,
+                r.PreparedBy,
+                r.Format,
+                r.GeneratedAt,
+                // Proje silinmişse FK `SetNull`'a düşer, yani ProjectId de null olur.
+                ProjectName = r.Project == null ? null : r.Project.Name,
+            })
+            .FirstOrDefaultAsync();
+
         // Var olmayan ve başkasına ait rapor AYNI yanıtı verir — hangisi
         // olduğunu dışarı sızdırmaz.
         if (report is null || report.UserId != userId) return Results.NotFound();
 
-        var path = Path.Combine(ResolveReportsPath(storage.Value), report.FilePath);
-        if (!File.Exists(path)) return Results.NotFound();
+        // Projesiz (tek araçtan alınmış) rapor ile projesi sonradan silinmiş
+        // rapor aynı yere düşer: yeniden üretecek kaynak veri yok. 404 DEĞİL —
+        // kayıt duruyor ve kullanıcının onu görmesi doğru; eksik olan kaynak.
+        if (report.ProjectId is null)
+        {
+            return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-project" }));
+        }
 
-        var contentType = report.Format == ReportFormat.Pdf
-            ? "application/pdf"
-            : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-        var ext = report.Format == ReportFormat.Pdf ? "pdf" : "xlsx";
+        var stored = await db.Calculations
+            .Where(c => c.ProjectId == report.ProjectId && c.ReportJson != null)
+            .OrderBy(c => c.SortOrder)
+            .Select(c => new { c.ReportJson, c.SchemaVersion })
+            .ToListAsync();
 
-        // Geçmişten indirmede yükün kendisi elde yok; ad kayıttan kurulur.
-        // Kayıt araç adını tutmadığı için burada başlığa düşülür — bu uç henüz
-        // arayüzden çağrılmıyor, çağrılacaksa Report'a araç adı eklenmeli.
-        var name = $"{Slugify(report.Title)}-{IsoDate(report.GeneratedAt)}.{ext}";
-        return Results.File(await File.ReadAllBytesAsync(path), contentType, name);
+        var sections = new List<ReportSection>();
+        var schemaVersion = 0;
+        foreach (var row in stored)
+        {
+            var section = TryReadSection(row.ReportJson!);
+            // Bozuk/eski bir bölüm sessizce atlanır — bir hesabın kaydı
+            // diğerlerinin raporunu engellemez. Aynı kural istemci tarafında da
+            // uygulanıyor (Project.jsx downloadReport).
+            if (section is null) continue;
+            sections.Add(section);
+            if (schemaVersion == 0) schemaVersion = row.SchemaVersion;
+        }
+
+        if (sections.Count == 0)
+        {
+            return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-sections" }));
+        }
+
+        var company = await db.Users
+            .Where(u => u.Id == userId)
+            .Select(u => u.Company)
+            .FirstOrDefaultAsync();
+
+        var payload = new ReportPayload(
+            schemaVersion,
+            report.Title,
+            report.PreparedBy,
+            company,
+            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
+            sections);
+
+        var isPdf = report.Format == ReportFormat.Pdf;
+        byte[] bytes;
+        try
+        {
+            bytes = isPdf ? pdf.Build(payload) : xlsx.Build(payload);
+        }
+        catch (ReportLayoutException)
+        {
+            return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
+        }
+
+        var contentType = isPdf ? PdfContentType : XlsxContentType;
+        var ext = isPdf ? "pdf" : "xlsx";
+
+        // Ad, üretim yolundaki kuralın proje dalıyla aynı: projeyi ayırt eden
+        // şey adıdır, `Title` bütün raporlarda aynı sabittir ("DONANIM RAPORU").
+        var basis = string.IsNullOrWhiteSpace(report.ProjectName) ? report.Title : report.ProjectName;
+        var name = $"{Slugify(basis)}-{IsoDate(report.GeneratedAt)}.{ext}";
+        return Results.File(bytes, contentType, name);
     }
+
+    // Kaydedilmiş bölüm istemcinin ürettiği camelCase JSON'dur; `JsonSerializer`
+    // web varsayılanlarıyla okunur (uçların gövde ayrıştırmasıyla aynı kural).
+    // Bozuk JSON istisna fırlatmaz, `null` döner: tek bozuk kayıt bütün raporu
+    // düşürmemeli.
+    private static ReportSection? TryReadSection(string json)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<ReportSection>(json, SectionJsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static readonly JsonSerializerOptions SectionJsonOptions = new(JsonSerializerDefaults.Web);
+
+    private const string PdfContentType = "application/pdf";
+
+    private const string XlsxContentType =
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
     private static ApiError? Validate(ReportPayload payload)
     {
@@ -141,27 +274,22 @@ public static class ReportEndpoints
         return null;
     }
 
-    private static async Task<Report> Persist(
-        AppDbContext db, StorageOptions storage, string userId,
-        ReportPayload payload, ReportFormat format, byte[] bytes, string ext, Guid? projectId = null)
+    // Belge diske yazılmaz, yalnızca kütüğe geçer. `FileSize` üretilen belgenin
+    // boyutudur ve saklanmasının nedeni ölçüm/kütük: kullanıcı ne kadar rapor
+    // üretti, hangi boyutta — bir dosyayı bulmak için değil.
+    private static async Task<Report> LogReport(
+        AppDbContext db, string userId,
+        ReportPayload payload, ReportFormat format, byte[] bytes, Guid? projectId = null)
     {
-        var dir = ResolveReportsPath(storage);
-        Directory.CreateDirectory(dir);
-
-        var id = Guid.NewGuid();
-        var fileName = $"{id}.{ext}";
-        await File.WriteAllBytesAsync(Path.Combine(dir, fileName), bytes);
-
         var report = new Report
         {
-            Id = id,
+            Id = Guid.NewGuid(),
             ProjectId = projectId,
             UserId = userId,
             Title = payload.Title,
             PreparedBy = payload.PreparedBy,
             Revision = 1,
             Format = format,
-            FilePath = fileName,
             FileSize = bytes.LongLength,
             GeneratedAt = DateTimeOffset.UtcNow,
         };
@@ -169,11 +297,6 @@ public static class ReportEndpoints
         await db.SaveChangesAsync();
         return report;
     }
-
-    private static string ResolveReportsPath(StorageOptions storage) =>
-        Path.IsPathRooted(storage.ReportsPath)
-            ? storage.ReportsPath
-            : Path.Combine(AppContext.BaseDirectory, storage.ReportsPath);
 
     private static string? CurrentUserId(HttpContext http) =>
         http.User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
