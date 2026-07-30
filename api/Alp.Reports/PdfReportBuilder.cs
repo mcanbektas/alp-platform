@@ -104,7 +104,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                     col.Item().PaddingTop(14).Text(t =>
                     {
                         t.DefaultTextStyle(s => s.FontFamily(FontBody));
-                        t.Span("Hazırlayan: ").FontColor(muted);
+                        t.Span($"{payload.Labels.PreparedBy}: ").FontColor(muted);
                         t.Span(payload.PreparedBy).SemiBold();
                     });
                     if (!string.IsNullOrWhiteSpace(payload.Company))
@@ -112,7 +112,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                         col.Item().PaddingTop(2).Text(t =>
                         {
                             t.DefaultTextStyle(s => s.FontFamily(FontBody));
-                            t.Span("Firma: ").FontColor(muted);
+                            t.Span($"{payload.Labels.Company}: ").FontColor(muted);
                             t.Span(payload.Company);
                         });
                     }
@@ -121,7 +121,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                     {
                         var no = i + 1;
                         var section = payload.Sections[i];
-                        col.Item().PaddingTop(i == 0 ? 16 : 20).Element(c => Section(c, no, section, green, ink, muted, rule, raised));
+                        col.Item().PaddingTop(i == 0 ? 16 : 20).Element(c => Section(c, no, section, payload.Labels, green, ink, muted, rule, raised));
                     }
                 });
             });
@@ -131,7 +131,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
     // Statik DEĞİL: SVG çözülemediğinde örnek üzerindeki `onSvgError` geri
     // çağrısına ulaşması gerekiyor.
     private void Section(
-        IContainer container, int no, ReportSection section,
+        IContainer container, int no, ReportSection section, ReportLabels labels,
         Color green, Color ink, Color muted, Color rule, Color raised)
     {
         // Sayfa kırılması blok SINIRINDA olur, blok ORTASINDA değil — her
@@ -148,7 +148,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
 
                 if (section.Inputs.Count > 0)
                 {
-                    head.Item().PaddingTop(10).Text("Girdiler").FontSize(9).SemiBold().FontColor(muted).FontFamily(FontBody);
+                    head.Item().PaddingTop(10).Text(labels.Inputs).FontSize(9).SemiBold().FontColor(muted).FontFamily(FontBody);
                     head.Item().PaddingTop(4).Element(c => FieldTable(c, section.Inputs, muted, rule, raised));
                 }
             });
@@ -173,7 +173,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                     }
                     else
                     {
-                        fig.Item().AlignCenter().Text("Şema bu raporda gösterilemedi.")
+                        fig.Item().AlignCenter().Text(labels.SchematicFailed)
                             .FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
                     }
                 });
@@ -196,7 +196,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
             {
                 col.Item().PaddingTop(12).ShowEntire().Column(res =>
                 {
-                    res.Item().Text("Sonuçlar").FontSize(9).SemiBold().FontColor(muted).FontFamily(FontBody);
+                    res.Item().Text(labels.Results).FontSize(9).SemiBold().FontColor(muted).FontFamily(FontBody);
                     res.Item().PaddingTop(4).Element(c => FieldTable(c, section.Results, muted, rule, raised, green));
                 });
             }
@@ -217,7 +217,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                     }
                     else
                     {
-                        fig.Item().AlignCenter().Text("Grafik bu raporda gösterilemedi.")
+                        fig.Item().AlignCenter().Text(labels.ChartFailed)
                             .FontSize(7.5f).FontColor(muted).FontFamily(FontBody);
                     }
                 });

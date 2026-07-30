@@ -42,7 +42,12 @@ public static class ReportEndpoints
         group.MapGet("/", ListReports);
         // İndirme artık dizgiyi yeniden koşuyor, diskten okumuyor: üretim
         // uçlarıyla aynı kovaya girer, yoksa ücretsiz bir CPU musluğu olurdu.
-        group.MapGet("/{id:guid}/download", Download).RequireRateLimiting("reports");
+        // GET DEĞİL POST: indirme kayıttan YENİDEN ÜRETİMDİR ve üretim artık
+        // belgenin çerçeve metnini istemciden alıyor (§5.1: sunucuda kullanıcı
+        // metni yok). Etiketler gövdeyle gelir; sorgu dizesine sığdırmak ya da
+        // sunucuya ikinci bir sözlük koymak iki kötü seçenekti.
+        group.MapPost("/{id:guid}/download", Download)
+            .RequireRateLimiting("reports").LimitBodySize(ProjectReportBodyLimitBytes);
 
         // ---- Proje raporu ----
         //
@@ -93,7 +98,7 @@ public static class ReportEndpoints
         var projectName = await OwnedProjectName(db, id, userId);
         if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
 
-        var payload = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date);
+        var payload = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date, req.Labels);
         if (payload is null)
         {
             // Projede hiç kayıtlı rapor bölümü yok — indirmenin üretecek verisi
@@ -226,6 +231,7 @@ public static class ReportEndpoints
     //     görüntü saklanmıyor. Değişmemiş bir projede sonuç birebir aynıdır.
     private static async Task<IResult> Download(
         Guid id,
+        ReportLabelsRequest req,
         AppDbContext db,
         HttpContext http,
         PdfReportBuilder pdf,
@@ -263,7 +269,7 @@ public static class ReportEndpoints
 
         var payload = await ProjectPayload(
             db, report.ProjectId.Value, userId, report.Title, report.PreparedBy,
-            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture));
+            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture), req.Labels);
 
         if (payload is null)
         {
@@ -299,7 +305,8 @@ public static class ReportEndpoints
     // bölümlerin sırası ya da bozuk kaydın atlanması gibi kurallar zamanla
     // ayrışır ve aynı proje iki yoldan farklı belge verirdi.
     private static async Task<ReportPayload?> ProjectPayload(
-        AppDbContext db, Guid projectId, string userId, string title, string preparedBy, string date)
+        AppDbContext db, Guid projectId, string userId, string title, string preparedBy, string date,
+        ReportLabels labels)
     {
         var stored = await db.Calculations
             .Where(c => c.ProjectId == projectId && c.ReportJson != null)
@@ -326,7 +333,7 @@ public static class ReportEndpoints
             .Select(u => u.Company)
             .FirstOrDefaultAsync();
 
-        return new ReportPayload(schemaVersion, title, preparedBy, company, date, sections);
+        return new ReportPayload(schemaVersion, title, preparedBy, company, date, labels, sections);
     }
 
     // Kaydedilmiş bölüm istemcinin ürettiği camelCase JSON'dur; `JsonSerializer`
@@ -465,3 +472,7 @@ public static class ReportEndpoints
 }
 
 public record ReportSummary(Guid Id, string Title, string PreparedBy, ReportFormat Format, long FileSize, DateTimeOffset GeneratedAt);
+
+// Kütükten yeniden indirme gövdesi — yalnız çerçeve metni taşır; künye
+// (başlık, hazırlayan, tarih) kaydın kendisinden okunur.
+public record ReportLabelsRequest(ReportLabels Labels);

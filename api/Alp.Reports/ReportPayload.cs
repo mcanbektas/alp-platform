@@ -10,7 +10,34 @@ public record ReportPayload(
     string PreparedBy,
     string? Company,
     string Date,
+    ReportLabels Labels,
     IReadOnlyList<ReportSection> Sections
+);
+
+// Belgenin çerçeve metni: sayfa/blok başlıkları, Excel sayfa adları ve dizgi
+// başarısızlığında basılan iki cümle.
+//
+// Bunlar eskiden bu derlemede ÇAKILI TÜRKÇEYDİ; İngilizce arayüzde bölümler
+// İngilizce, başlıklar Türkçe çıkıyordu. Sunucuya dil parametresi vermek
+// yerine metin yüke alındı — §5.1'in kuralı sunucunun hiçbir kullanıcı metni
+// tanımaması, tarayıcı zaten çevrilmiş yükü kurar. Karşılığı
+// `web/src/data/reportText.js` içindeki `reportLabels(lang)`.
+public record ReportLabels(
+    string SummarySheet,
+    string PreparedBy,
+    string Company,
+    string Date,
+    string Calculation,
+    string Inputs,
+    string Results,
+    string Equations,
+    string Notes,
+    string ChartData,
+    string ChartHint,
+    string SummaryHintSingle,
+    string SummaryHintMany,
+    string SchematicFailed,
+    string ChartFailed
 );
 
 public record ReportSection(

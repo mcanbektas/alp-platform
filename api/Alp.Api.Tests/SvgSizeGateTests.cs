@@ -42,7 +42,15 @@ public class SvgSizeGateTests
             SchematicCaption: schematicSvg is null ? null : "Şema",
             Chart: chartSvg is null ? null : new ReportChart("Grafik", chartSvg, null));
 
-        var payload = new ReportPayload(1, "Test", "Test", null, "2026-07-30", [section]);
+        // Etiketler artık yükün parçası (§5.1: sunucuda kullanıcı metni yok).
+        // Bu test SVG boyut kapısını sınıyor, dizgi metnini değil — sabitler
+        // yalnızca yükü kurmaya yeter, içerikleri kuralın konusu değil.
+        var labels = new ReportLabels(
+            "Summary", "Prepared by", "Company", "Date", "Calculation",
+            "Inputs", "Results", "Equations", "Notes", "Chart data",
+            "chart hint", "hint single", "hint many",
+            "schematic failed", "chart failed");
+        var payload = new ReportPayload(1, "Test", "Test", null, "2026-07-30", labels, [section]);
         return (builder.Build(payload), errors);
     }
 

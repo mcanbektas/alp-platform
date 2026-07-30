@@ -29,8 +29,9 @@ public class XlsxReportBuilder
     public byte[] Build(ReportPayload payload)
     {
         using var wb = new XLWorkbook();
+        var labels = payload.Labels;
 
-        var summary = wb.Worksheets.Add("Özet");
+        var summary = wb.Worksheets.Add(labels.SummarySheet);
         summary.Cell(1, 1).Value = payload.Title;
         summary.Cell(1, 1).Style.Font.Bold = true;
         summary.Cell(1, 1).Style.Font.FontSize = 14;
@@ -40,16 +41,16 @@ public class XlsxReportBuilder
         // firma boşken araya boş bir satır kalıyor ve künye ikiye bölünmüş
         // görünüyordu.
         var head = 2;
-        summary.Cell(head, 1).Value = "Hazırlayan";
+        summary.Cell(head, 1).Value = labels.PreparedBy;
         summary.Cell(head, 2).Value = payload.PreparedBy;
         head++;
         if (!string.IsNullOrWhiteSpace(payload.Company))
         {
-            summary.Cell(head, 1).Value = "Firma";
+            summary.Cell(head, 1).Value = labels.Company;
             summary.Cell(head, 2).Value = payload.Company;
             head++;
         }
-        summary.Cell(head, 1).Value = "Tarih";
+        summary.Cell(head, 1).Value = labels.Date;
         WriteDate(summary.Cell(head, 2), payload.Date);
         // Tarih gerçek bir sayı hücresi olduğu için Excel onu SAĞA yaslar ve
         // künyedeki öteki değerlerden kopuk düşer. Hizalama elle sola alınır;
@@ -62,12 +63,12 @@ public class XlsxReportBuilder
         var sheets = new List<IXLWorksheet>();
         for (var i = 0; i < payload.Sections.Count; i++)
         {
-            sheets.Add(BuildSectionSheet(wb, i + 1, payload.Sections[i]));
+            sheets.Add(BuildSectionSheet(wb, i + 1, payload.Sections[i], labels));
         }
 
         var row = head + 2;
         summary.Cell(row, 1).Value = "#";
-        summary.Cell(row, 2).Value = "Hesap";
+        summary.Cell(row, 2).Value = labels.Calculation;
         StyleTableHeader(summary.Range(row, 1, row, 2));
         row++;
         var firstDataRow = row;
@@ -96,10 +97,8 @@ public class XlsxReportBuilder
 
         row++;
         summary.Cell(row, 1).Value = payload.Sections.Count == 1
-            ? "Hesabın girdileri, sonuçları, denklemleri ve grafik verisi için yukarıdaki ada "
-              + "tıkla ya da alttaki sayfa sekmesine geç."
-            : "Her hesabın ayrıntısı kendi sayfasındadır — yukarıdaki ada tıkla ya da "
-              + "alttaki sayfa sekmelerine geç.";
+            ? labels.SummaryHintSingle
+            : labels.SummaryHintMany;
         summary.Cell(row, 1).Style.Font.FontColor = Muted;
         summary.Cell(row, 1).Style.Font.Italic = true;
         summary.Cell(row, 1).Style.Font.FontSize = 9;
@@ -117,9 +116,9 @@ public class XlsxReportBuilder
         return stream.ToArray();
     }
 
-    private static IXLWorksheet BuildSectionSheet(XLWorkbook wb, int no, ReportSection section)
+    private static IXLWorksheet BuildSectionSheet(XLWorkbook wb, int no, ReportSection section, ReportLabels labels)
     {
-        var name = SanitizeSheetName($"{no} {section.ToolName}");
+        var name = SanitizeSheetName($"{no} {section.ToolName}", labels.Calculation);
         var ws = wb.Worksheets.Add(name);
 
         var r = 1;
@@ -131,13 +130,13 @@ public class XlsxReportBuilder
 
         if (section.Inputs.Count > 0)
         {
-            r = WriteFieldBlock(ws, r, "Girdiler", section.Inputs);
+            r = WriteFieldBlock(ws, r, labels.Inputs, section.Inputs);
             r++;
         }
 
         if (section.Results.Count > 0)
         {
-            r = WriteFieldBlock(ws, r, "Sonuçlar", section.Results);
+            r = WriteFieldBlock(ws, r, labels.Results, section.Results);
             r++;
         }
 
@@ -145,7 +144,7 @@ public class XlsxReportBuilder
         // kullanıldığı bilgisi tabloya geçen kullanıcı için kayboluyordu.
         if (section.Formula.Count > 0)
         {
-            WriteBlockHeading(ws, r, "Denklemler");
+            WriteBlockHeading(ws, r, labels.Equations);
             r++;
             foreach (var line in section.Formula)
             {
@@ -164,7 +163,7 @@ public class XlsxReportBuilder
 
         if (section.Notes.Count > 0)
         {
-            WriteBlockHeading(ws, r, "Notlar");
+            WriteBlockHeading(ws, r, labels.Notes);
             r++;
             foreach (var note in section.Notes)
             {
@@ -184,7 +183,7 @@ public class XlsxReportBuilder
             // kapasitesi artar; …"); kalın başlık olarak basıldığında tablonun
             // çok ötesine taşıyor ve blok başlangıcı seçilemiyordu. Cümle
             // altta, sönük ve sardırılmış satırda durur.
-            WriteBlockHeading(ws, r, "Grafik verisi");
+            WriteBlockHeading(ws, r, labels.ChartData);
             r++;
             if (!string.IsNullOrWhiteSpace(section.Chart.Title))
             {
@@ -196,7 +195,7 @@ public class XlsxReportBuilder
                 r++;
             }
             ws.Cell(r, 1).Value =
-                "Aşağıdaki aralığı seçip Ekle → Grafik ile kendi grafiğini çizebilirsin.";
+                labels.ChartHint;
             ws.Cell(r, 1).Style.Font.Italic = true;
             ws.Cell(r, 1).Style.Font.FontColor = Muted;
             ws.Cell(r, 1).Style.Font.FontSize = 9;
@@ -329,10 +328,10 @@ public class XlsxReportBuilder
     // Kesme KELİME SINIRINDA yapılır: ham kesme "1 Yol Genişliği ve Akım Kapasit"
     // gibi yarım kelimeyle bitiyordu. Sınırdan önce boşluk yoksa ham kesmeye
     // düşülür — ad üretilemeden kalmaz.
-    private static string SanitizeSheetName(string name)
+    private static string SanitizeSheetName(string name, string fallback)
     {
         var cleaned = new string(name.Select(c => ":\\/?*[]".Contains(c) ? '-' : c).ToArray()).Trim();
-        if (cleaned.Length <= 31) return cleaned.Length > 0 ? cleaned : "Hesap";
+        if (cleaned.Length <= 31) return cleaned.Length > 0 ? cleaned : fallback;
 
         var cut = cleaned[..31];
         var lastSpace = cut.LastIndexOf(' ');

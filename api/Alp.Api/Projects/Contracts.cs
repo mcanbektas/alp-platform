@@ -1,3 +1,4 @@
+using Alp.Reports;
 namespace Alp.Api.Projects;
 
 // Proje özeti — liste ve oluşturma/güncelleme yanıtlarında aynı şekil kullanılır.
@@ -85,7 +86,10 @@ public record ProjectDetailResponse(
 // Proje raporu isteği. Bölümler gövdede GELMEZ — sunucu onları kaydedilmiş
 // hesaplardan kurar (bkz. ReportEndpoints, proje raporu ucu). Gövdede yalnızca
 // belgenin kendi künyesi durur; firma adı kullanıcı kaydından okunur.
-public record ProjectReportRequest(string Title, string PreparedBy, string Date);
+// `Labels`: belgenin çerçeve metni. Bölümleri sunucu kendi kaydından toplar ama
+// başlıkları toplayamaz — sunucuda kullanıcı metni yoktur (§5.1). Karşılığı
+// `web/src/data/reportText.js` → `reportLabels(lang)`.
+public record ProjectReportRequest(string Title, string PreparedBy, string Date, ReportLabels Labels);
 
 public record CreateCalculationRequest(
     string ToolKey,
