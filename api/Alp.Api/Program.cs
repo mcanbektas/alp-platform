@@ -3,7 +3,6 @@ using System.Threading.RateLimiting;
 using Alp.Api.Auth;
 using Alp.Api.Common;
 using Alp.Api.Projects;
-using Alp.Api.Records;
 using Alp.Api.Reports;
 using Alp.Data;
 using Alp.Domain;
@@ -397,6 +396,5 @@ app.MapGet("/api/health/ready", async (AppDbContext db, CancellationToken ct) =>
 app.MapAuthEndpoints();
 app.MapReportEndpoints();
 app.MapProjectEndpoints();
-app.MapThicknessRecordEndpoints();
 
 app.Run();

@@ -1,8 +1,11 @@
 namespace Alp.Domain;
 
-// localStorage'daki bakır kalınlığı kayıtlarının hesaba taşınmış hâli.
-// src/lib/thicknessRecords.js ile aynı şema; DataJson o dosyadaki
-// doğrulanmış kayıt yapısını olduğu gibi taşır.
+// KALDIRILMIŞ özelliğin tablosu — bakır kalınlığı kayıtları (eski spec §4.3).
+// Uçları, istemci tarafı ve testleri 2026-07-30'da söküldü: aynı listeyi iki
+// yüzeyde yönetmek bir şey kazandırmıyordu ve özelliğin kendisi istenmedi.
+// Varlık ve tablo logo kararıyla aynı gerekçeyle DURUYOR: tabloyu düşürmek
+// geri alınamaz bir migration, kimsenin okumadığı bir tablo ise bedava. Yeni
+// veri gelemez — yazan uç yok.
 public class ThicknessRecord
 {
     public Guid Id { get; set; }

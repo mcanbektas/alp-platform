@@ -61,10 +61,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
         builder.Entity<ThicknessRecord>(e =>
         {
             e.HasIndex(t => t.UserId);
-            // Kullanıcı başına ad tekliği burada zorlanır. Uygulama kodundaki
-            // "önce ara, yoksa ekle" yarış altında kopya üretiyordu; dizin
-            // ikinci satırı en baştan reddeder, uç da çakışmayı güncellemeye
-            // çevirir (bkz. ThicknessRecordEndpoints.SaveRecord).
+            // Özellik kaldırıldı, tablo duruyor — gerekçe Alp.Domain/
+            // ThicknessRecord.cs üstünde. Dizinler şema geçmişiyle tutarlılık
+            // için yerinde bırakıldı.
             e.HasIndex(t => new { t.UserId, t.NameKey }).IsUnique();
         });
     }
