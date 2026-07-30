@@ -39,11 +39,17 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
     // olsa bile (5000 satırlık bir proje raporu canlı sunucuda bunu tetikledi).
     // Sarmalanmadığında bu işlenmemiş bir 500 oluyordu; `ReportLayoutException`
     // olarak dışarı verilir ve uç nokta onu temiz bir hata koduna çevirir.
-    public byte[] Build(ReportPayload payload)
+    /// <param name="logoOverride">
+    /// Kullanıcının kendi firma logosu. Verilmezse başlıkta uygulamanın
+    /// varsayılan logosu kalır. Baytların geçerli bir PNG/JPEG olduğu YÜKLEME
+    /// sırasında doğrulanır (bkz. AuthEndpoints.UploadLogo); burada ikinci bir
+    /// çözümleme yapılmaz.
+    /// </param>
+    public byte[] Build(ReportPayload payload, byte[]? logoOverride = null)
     {
         try
         {
-            return Compose(payload).GeneratePdf();
+            return Compose(payload, logoOverride).GeneratePdf();
         }
         catch (DocumentLayoutException ex)
         {
@@ -51,8 +57,10 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
         }
     }
 
-    private Document Compose(ReportPayload payload)
+    private Document Compose(ReportPayload payload, byte[]? logoOverride)
     {
+        var logo = logoOverride is { Length: > 0 } ? logoOverride : logoPng;
+
         var green = Color.FromHex(Green);
         var ink = Color.FromHex(Ink);
         var muted = Color.FromHex(Muted);
@@ -71,7 +79,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                 {
                     col.Item().Row(row =>
                     {
-                        row.ConstantItem(110).Height(22).Image(logoPng).FitHeight();
+                        row.ConstantItem(110).Height(22).Image(logo).FitHeight();
                         row.RelativeItem();
                         row.AutoItem().AlignMiddle().Text(payload.Date).FontSize(8).FontColor(muted);
                     });
