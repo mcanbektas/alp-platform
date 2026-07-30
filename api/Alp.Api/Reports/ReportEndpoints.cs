@@ -71,8 +71,7 @@ public static class ReportEndpoints
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
 
-        var logo = await UserLogo(db, userId);
-        return await GenerateProjectReport(id, req, db, http, ReportFormat.Pdf, payload => builder.Build(payload, logo));
+        return await GenerateProjectReport(id, req, db, http, ReportFormat.Pdf, builder.Build);
     }
 
     private static Task<IResult> GenerateProjectXlsx(
@@ -144,9 +143,7 @@ public static class ReportEndpoints
         byte[] bytes;
         try
         {
-            // Firma logosu belgeye SUNUCUDAN girer, yükten değil: istemcinin
-            // gönderdiği bir görsel doğrulanmamış bayt olurdu.
-            bytes = builder.Build(payload, await UserLogo(db, userId));
+            bytes = builder.Build(payload);
         }
         catch (ReportLayoutException)
         {
@@ -277,7 +274,7 @@ public static class ReportEndpoints
         byte[] bytes;
         try
         {
-            bytes = isPdf ? pdf.Build(payload, await UserLogo(db, userId)) : xlsx.Build(payload);
+            bytes = isPdf ? pdf.Build(payload) : xlsx.Build(payload);
         }
         catch (ReportLayoutException)
         {
@@ -301,14 +298,6 @@ public static class ReportEndpoints
     // rapor düğmesi (GenerateProjectReport). İkisi ayrı ayrı yazılsaydı,
     // bölümlerin sırası ya da bozuk kaydın atlanması gibi kurallar zamanla
     // ayrışır ve aynı proje iki yoldan farklı belge verirdi.
-    // Kullanıcının firma logosu (yoksa null). Belge başlığında varsayılan
-    // logonun yerine geçer; baytların geçerliliği yükleme ucunda doğrulanmıştır.
-    private static async Task<byte[]?> UserLogo(AppDbContext db, string userId) =>
-        await db.Users
-            .Where(u => u.Id == userId)
-            .Select(u => u.LogoBytes)
-            .FirstOrDefaultAsync();
-
     private static async Task<ReportPayload?> ProjectPayload(
         AppDbContext db, Guid projectId, string userId, string title, string preparedBy, string date)
     {

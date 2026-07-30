@@ -177,11 +177,11 @@ builder.Services.AddRateLimiter(opt =>
             QueueLimit = 0,
         }));
 
-    // Oturum açmış kullanıcının yazma uçları (profil, logo, kayıtlar). Rapor
-    // kadar pahalı değiller ama hepsi veritabanına yazıyor ve logo yüklemesi
-    // yarım megabaytlık gövde taşıyor; sınırsız bırakıldığında tek hesap
-    // sürekli yazma üretebilir. Kullanıcı bazlı: bir hesabın gürültüsü
-    // diğerlerini etkilemez. Elle kullanımda bu tavana yaklaşmak imkânsız.
+    // Oturum açmış kullanıcının yazma uçları (profil, kayıtlar). Rapor kadar
+    // pahalı değiller ama hepsi veritabanına yazıyor; sınırsız bırakıldığında
+    // tek hesap sürekli yazma üretebilir. Kullanıcı bazlı: bir hesabın
+    // gürültüsü diğerlerini etkilemez. Elle kullanımda bu tavana yaklaşmak
+    // imkânsız.
     opt.AddPolicy("writes", ctx => RateLimitPartition.GetFixedWindowLimiter(
         UserKey(ctx), _ => new FixedWindowRateLimiterOptions
         {

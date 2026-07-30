@@ -39,17 +39,11 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
     // olsa bile (5000 satırlık bir proje raporu canlı sunucuda bunu tetikledi).
     // Sarmalanmadığında bu işlenmemiş bir 500 oluyordu; `ReportLayoutException`
     // olarak dışarı verilir ve uç nokta onu temiz bir hata koduna çevirir.
-    /// <param name="logoOverride">
-    /// Kullanıcının kendi firma logosu. Verilmezse başlıkta uygulamanın
-    /// varsayılan logosu kalır. Baytların geçerli bir PNG/JPEG olduğu YÜKLEME
-    /// sırasında doğrulanır (bkz. AuthEndpoints.UploadLogo); burada ikinci bir
-    /// çözümleme yapılmaz.
-    /// </param>
-    public byte[] Build(ReportPayload payload, byte[]? logoOverride = null)
+    public byte[] Build(ReportPayload payload)
     {
         try
         {
-            return Compose(payload, logoOverride).GeneratePdf();
+            return Compose(payload).GeneratePdf();
         }
         catch (DocumentLayoutException ex)
         {
@@ -57,10 +51,8 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
         }
     }
 
-    private Document Compose(ReportPayload payload, byte[]? logoOverride)
+    private Document Compose(ReportPayload payload)
     {
-        var logo = logoOverride is { Length: > 0 } ? logoOverride : logoPng;
-
         var green = Color.FromHex(Green);
         var ink = Color.FromHex(Ink);
         var muted = Color.FromHex(Muted);
@@ -87,11 +79,7 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                         // kaynağın tamamını gömer — daha yükseği bir şey
                         // kazandırmaz, görüntü büyütülmez. Bedeli rapor başına
                         // ~135 KB; indirilen bir belge için kabul edildi.
-                        //
-                        // Kullanıcının yüklediği logo da bu kapıdan geçer ve
-                        // 22pt'ye sığdırıldığı için en fazla 314 piksel gömülür:
-                        // büyük bir yükleme raporu şişirmez.
-                        row.ConstantItem(110).Height(22).Image(logo).WithRasterDpi(1100).FitHeight();
+                        row.ConstantItem(110).Height(22).Image(logoPng).WithRasterDpi(1100).FitHeight();
                         row.RelativeItem();
                         row.AutoItem().AlignMiddle().Text(payload.Date).FontSize(8).FontColor(muted);
                     });

@@ -44,19 +44,7 @@ public static class AuthEndpoints
 
         me.MapGet("/", Me);
         me.MapPatch("/", UpdateMe).RequireRateLimiting("writes").LimitBodySize(AuthBodyLimitBytes);
-        me.MapGet("/logo", GetLogo);
-        me.MapPost("/logo", UploadLogo).RequireRateLimiting("writes").LimitBodySize(LogoUploadLimitBytes);
-        me.MapDelete("/logo", DeleteLogo).RequireRateLimiting("writes");
     }
-
-    // ---- Firma logosu ----
-    //
-    // Sınır çift katmanlı: gövde limiti isteği daha okunmadan keser, aşağıdaki
-    // `LogoMaxBytes` ise çözülmüş dosyayı ölçer. İkisi ayrı çünkü multipart
-    // zarfı dosyadan biraz büyüktür ve kullanıcıya "512 KB" derken zarfın
-    // payını cezalandırmak yanlış olurdu.
-    private const long LogoUploadLimitBytes = 1024 * 1024;
-    private const int LogoMaxBytes = 512 * 1024;
 
     // appsettings.json anahtarı boş dize olarak commit edilir (gizli değer
     // yok), `??` yalnızca null'da devreye girer — boş dize de "ayarlanmamış"
@@ -389,7 +377,7 @@ public static class AuthEndpoints
     }
 
     private static MeResponse ToMeResponse(ApplicationUser user) =>
-        new(user.Id, user.Email!, user.DisplayName, user.Company, user.Plan, user.LogoBytes is { Length: > 0 });
+        new(user.Id, user.Email!, user.DisplayName, user.Company, user.Plan);
 
     private static async Task<IResult> UpdateMe(
         UpdateMeRequest req, UserManager<ApplicationUser> userManager, HttpContext http)
@@ -429,83 +417,6 @@ public static class AuthEndpoints
 
     private const int DisplayNameMax = 80;
     private const int CompanyMax = 120;
-
-    private static async Task<IResult> GetLogo(UserManager<ApplicationUser> userManager, HttpContext http)
-    {
-        var user = await CurrentUser(userManager, http);
-        if (user is null) return Results.Unauthorized();
-        if (user.LogoBytes is not { Length: > 0 }) return Results.NotFound();
-
-        // Tür sunucuda saklanan doğrulanmış değerdir; istemcinin tahminine
-        // bırakılmaz. `no-store` değil ama özel: logo kullanıcıya özgüdür,
-        // paylaşılan bir vekilde önbelleklenmemeli.
-        http.Response.Headers.CacheControl = "private, max-age=300";
-        return Results.File(user.LogoBytes, user.LogoContentType ?? "application/octet-stream");
-    }
-
-    // Yükleme multipart'tır: base64 JSON gövde aynı dosyayı ~%33 şişirir ve
-    // sınırları hesaplamayı zorlaştırırdı.
-    private static async Task<IResult> UploadLogo(
-        HttpRequest request, UserManager<ApplicationUser> userManager, HttpContext http)
-    {
-        var user = await CurrentUser(userManager, http);
-        if (user is null) return Results.Unauthorized();
-
-        if (!request.HasFormContentType) return Results.BadRequest(new ApiError("INVALID_CONTENT_TYPE"));
-
-        var form = await request.ReadFormAsync();
-        var file = form.Files["logo"] ?? form.Files.FirstOrDefault();
-        if (file is null || file.Length == 0) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "logo" }));
-        if (file.Length > LogoMaxBytes)
-        {
-            return Results.BadRequest(new ApiError("FILE_TOO_LARGE", new { max = LogoMaxBytes, size = file.Length }));
-        }
-
-        using var buffer = new MemoryStream();
-        await file.CopyToAsync(buffer);
-        var bytes = buffer.ToArray();
-
-        // Tür DOSYANIN KENDİSİNDEN okunur: `Content-Type` başlığı ve uzantı
-        // istemcinin iddiasıdır, ikisi de serbestçe uydurulabilir. Kabul edilen
-        // iki biçimin sihirli baytları sabittir ve başka hiçbir şey saklanmaz —
-        // böylece "logo" alanı rastgele veri taşıyan bir depoya dönüşemez.
-        var contentType = DetectImageType(bytes);
-        if (contentType is null) return Results.BadRequest(new ApiError("UNSUPPORTED_IMAGE"));
-
-        user.LogoBytes = bytes;
-        user.LogoContentType = contentType;
-
-        var result = await userManager.UpdateAsync(user);
-        if (!result.Succeeded) return Results.BadRequest(new ApiError("UPDATE_FAILED"));
-
-        return Results.Ok(ToMeResponse(user));
-    }
-
-    private static async Task<IResult> DeleteLogo(UserManager<ApplicationUser> userManager, HttpContext http)
-    {
-        var user = await CurrentUser(userManager, http);
-        if (user is null) return Results.Unauthorized();
-
-        user.LogoBytes = null;
-        user.LogoContentType = null;
-
-        var result = await userManager.UpdateAsync(user);
-        if (!result.Succeeded) return Results.BadRequest(new ApiError("UPDATE_FAILED"));
-
-        // Logosu zaten olmayan kullanıcı için de aynı yanıt: silme isteği
-        // idempotenttir, "yoktu zaten" bir hata değildir.
-        return Results.Ok(ToMeResponse(user));
-    }
-
-    private static readonly byte[] PngMagic = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-    private static readonly byte[] JpegMagic = [0xFF, 0xD8, 0xFF];
-
-    internal static string? DetectImageType(byte[] bytes)
-    {
-        if (bytes.Length > PngMagic.Length && bytes.AsSpan(0, PngMagic.Length).SequenceEqual(PngMagic)) return "image/png";
-        if (bytes.Length > JpegMagic.Length && bytes.AsSpan(0, JpegMagic.Length).SequenceEqual(JpegMagic)) return "image/jpeg";
-        return null;
-    }
 
     private static async Task<ApplicationUser?> CurrentUser(UserManager<ApplicationUser> userManager, HttpContext http)
     {

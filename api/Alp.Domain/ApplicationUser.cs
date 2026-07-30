@@ -7,14 +7,16 @@ public class ApplicationUser : IdentityUser
     public string DisplayName { get; set; } = string.Empty;
     public string? Company { get; set; }
 
-    // Firma logosu veritabanında durur, diskte DEĞİL. Rapor belgeleri de
-    // saklanmadığı için (bkz. ReportEndpoints) sunucuda ikinci bir dosya
-    // yüzeyi açmanın karşılığı yok: logo küçük (≤ 512 KB), tek satır, yedeği
-    // veritabanı yedeğiyle birlikte gelir ve kullanıcı silinince kaskatla
-    // gider — yetim dosya kalmaz.
+    // KULLANILMIYOR. Firma logosu özelliği kaldırıldı: yükleme ekranı, üç uç
+    // (`/api/me/logo`) ve raporun kullanıcı logosuna geçme davranışı düştü —
+    // rapor başlığında artık daima uygulamanın kendi logosu var, firma yalnızca
+    // künyede metin olarak görünüyor. Karar ve gerekçe:
+    // docs/uyelik-ve-rapor-plani.md §26.
     //
-    // `LogoContentType` yüklemede doğrulanan türdür (image/png | image/jpeg);
-    // indirme yanıtında aynen kullanılır, istemcinin tahminine bırakılmaz.
+    // Sütunlar bilinçle duruyor: düşürmek geri alınamaz bir migration ve şu an
+    // hiçbir okuyucusu olmayan iki sütunun bedeli yok. Özellik geri istenirse
+    // veri kaybı olmadan dönülür; kalıcı olarak silinmesine karar verilirse tek
+    // bir migration yeter.
     public byte[]? LogoBytes { get; set; }
     public string? LogoContentType { get; set; }
 

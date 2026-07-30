@@ -8,10 +8,10 @@ public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Email, string Token, string NewPassword);
 
 public record LoginResponse(string AccessToken, DateTimeOffset ExpiresAt);
-// `HasLogo`: logonun kendisi bu yanıtta taşınmaz (her sayfa yüklemesinde
-// yüzlerce KB'lık bayt demek olurdu). Arayüz bayrağa bakıp `GET /api/me/logo`
-// adresini gösterir ya da hiç göstermez.
-public record MeResponse(string Id, string Email, string DisplayName, string? Company, string Plan, bool HasLogo);
+// E-posta yanıtta var ama DEĞİŞTİRİLEMEZ: `UpdateMeRequest` böyle bir alan
+// taşımıyor, yani uç doğrudan çağrılsa bile kayıt e-postası kalıcıdır. Kimlik
+// doğrulaması ve parola sıfırlama o adrese bağlı.
+public record MeResponse(string Id, string Email, string DisplayName, string? Company, string Plan);
 
 // Verilmeyen alan DEĞİŞMEZ. `Company` boş dize olarak GÖNDERİLMİŞSE alan
 // temizlenir (null'a döner) — proje güncellemesindeki kuralın aynısı.
