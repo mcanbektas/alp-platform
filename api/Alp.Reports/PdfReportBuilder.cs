@@ -79,7 +79,19 @@ public class PdfReportBuilder(byte[] logoPng, Action<string>? onSvgError = null)
                 {
                     col.Item().Row(row =>
                     {
-                        row.ConstantItem(110).Height(22).Image(logo).FitHeight();
+                        // Hedef DPI açıkça yükseltilir. QuestPDF varsayılanı 288
+                        // ve logo 22pt yüksekliğinde çizildiği için gömülen
+                        // görüntü 88 piksele iniyordu (kaynak 314 taşıyor):
+                        // ekranda %100'de fark edilmiyor ama yakınlaştırınca ve
+                        // baskıda kenarlar bulanık çıkıyordu. 1100 DPI, 22pt'de
+                        // kaynağın tamamını gömer — daha yükseği bir şey
+                        // kazandırmaz, görüntü büyütülmez. Bedeli rapor başına
+                        // ~135 KB; indirilen bir belge için kabul edildi.
+                        //
+                        // Kullanıcının yüklediği logo da bu kapıdan geçer ve
+                        // 22pt'ye sığdırıldığı için en fazla 314 piksel gömülür:
+                        // büyük bir yükleme raporu şişirmez.
+                        row.ConstantItem(110).Height(22).Image(logo).WithRasterDpi(1100).FitHeight();
                         row.RelativeItem();
                         row.AutoItem().AlignMiddle().Text(payload.Date).FontSize(8).FontColor(muted);
                     });
