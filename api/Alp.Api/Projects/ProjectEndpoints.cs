@@ -87,11 +87,27 @@ public static class ProjectEndpoints
         if (error is not null) return error;
         var project = owned!; // guard geçildi: sahiplenilen proje null değil
 
-        var calculations = await db.Calculations
+        // `ReportJson` yanıta girmez ama önizleme satırları ondan türetildiği
+        // için okunur. Satır içi SVG bu yüzden sunucuda kalır: 60 hesaplı bir
+        // projede yanıt ~955 KB'dan ~30 KB'a iner.
+        var stored = await db.Calculations
             .Where(c => c.ProjectId == id)
             .OrderBy(c => c.SortOrder)
-            .Select(c => ToDto(c))
+            .Select(c => new
+            {
+                c.Id, c.ToolKey, c.ToolMode, c.SortOrder, c.ReportJson,
+                c.EngineVersion, c.SchemaVersion, c.CreatedAt, c.UpdatedAt,
+            })
             .ToListAsync();
+
+        var calculations = stored.Select(c =>
+        {
+            var (preview, mode) = ReportPreview.From(c.ReportJson);
+            return new CalculationSummaryDto(
+                c.Id, c.ToolKey, c.ToolMode, c.SortOrder,
+                preview, mode, c.ReportJson is not null,
+                c.EngineVersion, c.SchemaVersion, c.CreatedAt, c.UpdatedAt);
+        }).ToList();
 
         return Results.Ok(new ProjectDetailResponse(
             project.Id, project.Name, project.Description, project.CreatedAt, project.UpdatedAt, calculations));
@@ -296,7 +312,7 @@ public static class ProjectEndpoints
     }
 
     private static CalculationDto ToDto(Calculation c) => new(
-        c.Id, c.ToolKey, c.ToolMode, c.SortOrder, c.InputsJson, c.ResultJson, c.ReportJson,
+        c.Id, c.ToolKey, c.ToolMode, c.SortOrder, c.InputsJson, c.ResultJson,
         c.EngineVersion, c.SchemaVersion, c.CreatedAt, c.UpdatedAt);
 
     private static string? CurrentUserId(HttpContext http) =>

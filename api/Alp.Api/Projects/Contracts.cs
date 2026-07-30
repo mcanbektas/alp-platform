@@ -19,8 +19,13 @@ public record CreateProjectRequest(string Name, string? Description);
 // trim sonrası boş olamaz.
 public record UpdateProjectRequest(string? Name, string? Description);
 
-// InputsJson/ResultJson/ReportJson sunucu için opak dizedir — burada asla
+// InputsJson/ResultJson sunucu için opak dizedir — burada asla
 // ayrıştırılmaz/yeniden gömülmez. Sunucu hiçbir aracın içeriğini bilmez.
+//
+// `ReportJson` yanıtlarda HİÇ dönmez (yazma yönünde hâlâ kabul edilir): içinde
+// satır içi SVG taşır ve proje detayı yanıtının ~%92'sini o kaplıyordu
+// (60 hesapta 955 KB). Ekranın ondan ihtiyaç duyduğu tek şey birkaç önizleme
+// satırıydı; o satırlar artık sunucuda türetilip `Preview` alanında geliyor.
 public record CalculationDto(
     Guid Id,
     string ToolKey,
@@ -28,7 +33,31 @@ public record CalculationDto(
     int SortOrder,
     string InputsJson,
     string ResultJson,
-    string? ReportJson,
+    string EngineVersion,
+    int SchemaVersion,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt
+);
+
+// Rapor bölümünden türetilmiş tek önizleme satırı. Yalnızca `results`
+// dizisinin etiket/değer/birim alanları taşınır; SVG alanlarına dokunulmaz,
+// dolayısıyla buradan ekrana geri yazılabilecek bir işaretleme çıkmaz.
+public record PreviewField(string Label, string Value, string? Unit, bool Emphasis);
+
+// Proje detayındaki hesap satırı. Liste yanıtında N tane döndüğü için yalnız
+// satırın GÖSTERDİĞİ alanları taşır: ham `InputsJson`/`ResultJson` da dışarıda
+// kalır — onları yalnızca tekil hesap ucu (araç ekranına geri yükleme) verir.
+//
+// `HasReport`: satırda "rapor bölümü yok" çipini bu belirler. Bölümün kendisi
+// dönmediği için varlığı ayrı bir bayrak olarak taşınmak zorunda.
+public record CalculationSummaryDto(
+    Guid Id,
+    string ToolKey,
+    string? ToolMode,
+    int SortOrder,
+    IReadOnlyList<PreviewField> Preview,
+    string? PreviewMode,
+    bool HasReport,
     string EngineVersion,
     int SchemaVersion,
     DateTimeOffset CreatedAt,
@@ -50,8 +79,13 @@ public record ProjectDetailResponse(
     string? Description,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    IReadOnlyList<CalculationDto> Calculations
+    IReadOnlyList<CalculationSummaryDto> Calculations
 );
+
+// Proje raporu isteği. Bölümler gövdede GELMEZ — sunucu onları kaydedilmiş
+// hesaplardan kurar (bkz. ReportEndpoints, proje raporu ucu). Gövdede yalnızca
+// belgenin kendi künyesi durur; firma adı kullanıcı kaydından okunur.
+public record ProjectReportRequest(string Title, string PreparedBy, string Date);
 
 public record CreateCalculationRequest(
     string ToolKey,

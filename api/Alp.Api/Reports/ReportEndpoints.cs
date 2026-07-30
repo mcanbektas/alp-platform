@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Alp.Api.Common;
 using Alp.Api.Http;
+using Alp.Api.Projects;
 using Alp.Data;
 using Alp.Domain;
 using Alp.Reports;
@@ -42,6 +43,76 @@ public static class ReportEndpoints
         // İndirme artık dizgiyi yeniden koşuyor, diskten okumuyor: üretim
         // uçlarıyla aynı kovaya girer, yoksa ücretsiz bir CPU musluğu olurdu.
         group.MapGet("/{id:guid}/download", Download).RequireRateLimiting("reports");
+
+        // ---- Proje raporu ----
+        //
+        // Yukarıdaki iki üretim ucu yükü İSTEMCİDEN alır (araç ekranı canlı
+        // SVG'yi o an yakalar). Proje raporunda böyle bir canlı ekran yok:
+        // bölümler zaten kayıtlı. Proje detayı artık `ReportJson` göndermediği
+        // için istemci onları toplayamaz da — yük burada sunucuda kurulur ve
+        // gövde yalnız belgenin künyesini taşır.
+        //
+        // Rota projenin altında ama kod rapor tarafında duruyor: dizgi, hata
+        // kodları ve kütük kaydı burada tek yerde.
+        var projectReports = app.MapGroup("/api/projects/{id:guid}/report").RequireAuthorization();
+
+        projectReports.MapPost("/pdf", GenerateProjectPdf)
+            .RequireRateLimiting("reports").LimitBodySize(ProjectReportBodyLimitBytes);
+        projectReports.MapPost("/xlsx", GenerateProjectXlsx)
+            .RequireRateLimiting("reports").LimitBodySize(ProjectReportBodyLimitBytes);
+    }
+
+    // Gövdede yalnız başlık, hazırlayan ve tarih var — 8 KB fazlasıyla yeter.
+    private const long ProjectReportBodyLimitBytes = 8 * 1024;
+
+    private static Task<IResult> GenerateProjectPdf(
+        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, PdfReportBuilder builder) =>
+        GenerateProjectReport(id, req, db, http, ReportFormat.Pdf, builder.Build);
+
+    private static Task<IResult> GenerateProjectXlsx(
+        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, XlsxReportBuilder builder) =>
+        GenerateProjectReport(id, req, db, http, ReportFormat.Xlsx, builder.Build);
+
+    private static async Task<IResult> GenerateProjectReport(
+        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http,
+        ReportFormat format, Func<ReportPayload, byte[]> build)
+    {
+        var userId = CurrentUserId(http);
+        if (userId is null) return Results.Unauthorized();
+
+        if (string.IsNullOrWhiteSpace(req.Title)) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "title" }));
+        if (string.IsNullOrWhiteSpace(req.PreparedBy)) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "preparedBy" }));
+        if (string.IsNullOrWhiteSpace(req.Date)) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "date" }));
+
+        // Var olmayan ve başkasına ait proje AYNI 404'ü verir.
+        var projectName = await OwnedProjectName(db, id, userId);
+        if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
+
+        var payload = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date);
+        if (payload is null)
+        {
+            // Projede hiç kayıtlı rapor bölümü yok — indirmenin üretecek verisi
+            // yok. Geçmişten indirmedeki durumla aynı, kod da aynı.
+            return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-sections" }));
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = build(payload);
+        }
+        catch (ReportLayoutException)
+        {
+            return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
+        }
+
+        var isPdf = format == ReportFormat.Pdf;
+        var record = await LogReport(db, userId, payload, format, bytes, id);
+
+        return Results.File(
+            bytes,
+            isPdf ? PdfContentType : XlsxContentType,
+            DownloadName(payload, projectName, record, isPdf ? "pdf" : "xlsx"));
     }
 
     private static async Task<IResult> GeneratePdf(
@@ -185,42 +256,14 @@ public static class ReportEndpoints
             return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-project" }));
         }
 
-        var stored = await db.Calculations
-            .Where(c => c.ProjectId == report.ProjectId && c.ReportJson != null)
-            .OrderBy(c => c.SortOrder)
-            .Select(c => new { c.ReportJson, c.SchemaVersion })
-            .ToListAsync();
+        var payload = await ProjectPayload(
+            db, report.ProjectId.Value, userId, report.Title, report.PreparedBy,
+            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture));
 
-        var sections = new List<ReportSection>();
-        var schemaVersion = 0;
-        foreach (var row in stored)
-        {
-            var section = TryReadSection(row.ReportJson!);
-            // Bozuk/eski bir bölüm sessizce atlanır — bir hesabın kaydı
-            // diğerlerinin raporunu engellemez. Aynı kural istemci tarafında da
-            // uygulanıyor (Project.jsx downloadReport).
-            if (section is null) continue;
-            sections.Add(section);
-            if (schemaVersion == 0) schemaVersion = row.SchemaVersion;
-        }
-
-        if (sections.Count == 0)
+        if (payload is null)
         {
             return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-sections" }));
         }
-
-        var company = await db.Users
-            .Where(u => u.Id == userId)
-            .Select(u => u.Company)
-            .FirstOrDefaultAsync();
-
-        var payload = new ReportPayload(
-            schemaVersion,
-            report.Title,
-            report.PreparedBy,
-            company,
-            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture),
-            sections);
 
         var isPdf = report.Format == ReportFormat.Pdf;
         byte[] bytes;
@@ -241,6 +284,44 @@ public static class ReportEndpoints
         var basis = string.IsNullOrWhiteSpace(report.ProjectName) ? report.Title : report.ProjectName;
         var name = $"{Slugify(basis)}-{IsoDate(report.GeneratedAt)}.{ext}";
         return Results.File(bytes, contentType, name);
+    }
+
+    // Projedeki kaydedilmiş hesaplardan rapor yükünü kurar. `null` dönmesi
+    // "yeniden üretecek okunabilir bölüm yok" demektir.
+    //
+    // İki yol da buradan geçer: geçmişten indirme (Download) ve proje ekranının
+    // rapor düğmesi (GenerateProjectReport). İkisi ayrı ayrı yazılsaydı,
+    // bölümlerin sırası ya da bozuk kaydın atlanması gibi kurallar zamanla
+    // ayrışır ve aynı proje iki yoldan farklı belge verirdi.
+    private static async Task<ReportPayload?> ProjectPayload(
+        AppDbContext db, Guid projectId, string userId, string title, string preparedBy, string date)
+    {
+        var stored = await db.Calculations
+            .Where(c => c.ProjectId == projectId && c.ReportJson != null)
+            .OrderBy(c => c.SortOrder)
+            .Select(c => new { c.ReportJson, c.SchemaVersion })
+            .ToListAsync();
+
+        var sections = new List<ReportSection>();
+        var schemaVersion = 0;
+        foreach (var row in stored)
+        {
+            var section = TryReadSection(row.ReportJson!);
+            // Bozuk/eski bir bölüm sessizce atlanır — bir hesabın kaydı
+            // diğerlerinin raporunu engellemez.
+            if (section is null) continue;
+            sections.Add(section);
+            if (schemaVersion == 0) schemaVersion = row.SchemaVersion;
+        }
+
+        if (sections.Count == 0) return null;
+
+        var company = await db.Users
+            .Where(u => u.Id == userId)
+            .Select(u => u.Company)
+            .FirstOrDefaultAsync();
+
+        return new ReportPayload(schemaVersion, title, preparedBy, company, date, sections);
     }
 
     // Kaydedilmiş bölüm istemcinin ürettiği camelCase JSON'dur; `JsonSerializer`
