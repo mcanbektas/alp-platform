@@ -43,10 +43,10 @@ public static class AuthEndpoints
         var me = app.MapGroup("/api/me").RequireAuthorization();
 
         me.MapGet("/", Me);
-        me.MapPatch("/", UpdateMe).LimitBodySize(AuthBodyLimitBytes);
+        me.MapPatch("/", UpdateMe).RequireRateLimiting("writes").LimitBodySize(AuthBodyLimitBytes);
         me.MapGet("/logo", GetLogo);
-        me.MapPost("/logo", UploadLogo).LimitBodySize(LogoUploadLimitBytes);
-        me.MapDelete("/logo", DeleteLogo);
+        me.MapPost("/logo", UploadLogo).RequireRateLimiting("writes").LimitBodySize(LogoUploadLimitBytes);
+        me.MapDelete("/logo", DeleteLogo).RequireRateLimiting("writes");
     }
 
     // ---- Firma logosu ----

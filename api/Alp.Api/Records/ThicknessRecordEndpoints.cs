@@ -33,8 +33,8 @@ public static class ThicknessRecordEndpoints
         var group = app.MapGroup("/api/thickness-records").RequireAuthorization();
 
         group.MapGet("/", ListRecords);
-        group.MapPost("/", SaveRecord).LimitBodySize(RecordBodyLimitBytes);
-        group.MapDelete("/{id:guid}", DeleteRecord);
+        group.MapPost("/", SaveRecord).RequireRateLimiting("writes").LimitBodySize(RecordBodyLimitBytes);
+        group.MapDelete("/{id:guid}", DeleteRecord).RequireRateLimiting("writes");
     }
 
     private static async Task<IResult> ListRecords(AppDbContext db, HttpContext http)
@@ -71,20 +71,22 @@ public static class ThicknessRecordEndpoints
         if (string.IsNullOrWhiteSpace(req.DataJson)) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "dataJson" }));
 
         var key = RecordKey(name);
-        var existing = await db.ThicknessRecords
-            .Where(r => r.UserId == userId)
-            .ToListAsync();
 
-        var match = existing.FirstOrDefault(r => RecordKey(r.Name) == key);
-        if (match is null && existing.Count >= RecordMax)
-        {
-            // Sessizce en eskiyi atmak yerine açık hata: kullanıcı hangi kaydı
-            // sileceğine kendisi karar verir.
-            return Results.Conflict(new ApiError("RECORD_LIMIT", new { limit = RecordMax, stored = existing.Count }));
-        }
+        // Var olanı ararken `DataJson` ÇEKİLMEZ: 50 kaydın zarfını yalnızca
+        // "bu ad duruyor mu" sorusu için belleğe almak gereksiz.
+        var match = await db.ThicknessRecords
+            .FirstOrDefaultAsync(r => r.UserId == userId && r.NameKey == key);
 
         if (match is null)
         {
+            var stored = await db.ThicknessRecords.CountAsync(r => r.UserId == userId);
+            if (stored >= RecordMax)
+            {
+                // Sessizce en eskiyi atmak yerine açık hata: kullanıcı hangi
+                // kaydı sileceğine kendisi karar verir.
+                return Results.Conflict(new ApiError("RECORD_LIMIT", new { limit = RecordMax, stored }));
+            }
+
             match = new ThicknessRecord
             {
                 Id = Guid.NewGuid(),
@@ -95,10 +97,31 @@ public static class ThicknessRecordEndpoints
         }
 
         match.Name = name;
+        match.NameKey = key;
         match.SchemaVersion = req.SchemaVersion;
         match.DataJson = req.DataJson;
 
-        await db.SaveChangesAsync();
+        try
+        {
+            await db.SaveChangesAsync();
+        }
+        catch (DbUpdateException) when (match.Id != Guid.Empty && db.Entry(match).State == EntityState.Added)
+        {
+            // Benzersiz dizin çakıştı: aynı adla eşzamanlı ikinci bir istek
+            // araya girdi. Bu bir hata değil — "aynı ad = aynı kayıt" kuralının
+            // ta kendisi. Eklemeyi bırakıp o satırın üzerine yazılır.
+            db.Entry(match).State = EntityState.Detached;
+
+            var winner = await db.ThicknessRecords
+                .FirstOrDefaultAsync(r => r.UserId == userId && r.NameKey == key);
+            if (winner is null) throw; // çakışma başka bir nedenden — yut­ma
+
+            winner.Name = name;
+            winner.SchemaVersion = req.SchemaVersion;
+            winner.DataJson = req.DataJson;
+            await db.SaveChangesAsync();
+            match = winner;
+        }
 
         return Results.Ok(new ThicknessRecordDto(match.Id, match.Name, match.SchemaVersion, match.DataJson, match.CreatedAt));
     }
