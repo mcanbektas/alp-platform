@@ -32,7 +32,7 @@ public static class AuthEndpoints
         group.MapPost("/register", Register).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapPost("/login", Login).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapPost("/refresh", Refresh).RequireRateLimiting("refresh");
-        group.MapPost("/logout", Logout).RequireRateLimiting("auth");
+        group.MapPost("/logout", Logout).RequireRateLimiting("logout");
         group.MapPost("/forgot-password", ForgotPassword).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapPost("/reset-password", ResetPassword).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapGet("/confirm-email", ConfirmEmail).RequireRateLimiting("auth");

@@ -131,12 +131,34 @@ builder.Services.AddRateLimiter(opt =>
             QueueLimit = 0,
         }));
 
-    // refresh — sekme başına sayfa yüklemesinde sessizce çağrılır, meşru
-    // trafik "auth" politikasından daha sık gerçekleşir.
+    // refresh — her sayfa yüklemesinde sessizce çağrılır (AuthProvider açılışta
+    // yeniler), meşru trafik "auth" politikasından çok daha sık gerçekleşir.
+    //
+    // Neden hâlâ IP başına, oturum başına değil: yenileme token'ı her yenilemede
+    // DÖNDÜĞÜ (rotating) için çerezin değeri her istekte farklıdır — çerezi
+    // anahtar yapmak meşru oturuma her seferinde taze kova verir (hiç
+    // sınırlanmaz) ama çöp çerez gönderen bir saldırgana da öyle verir, yani
+    // sınır tamamen kaçar (DB araması seli). Token 256-bit CSPRNG olduğu için
+    // bu uçta kaba kuvvet zaten imkânsız; sınırın tek işi kaynak/DoS koruması.
+    // O yüzden IP başına kalır, ama NAT/CGNAT arkasındaki çok kullanıcı tek
+    // kovayı paylaştığından limit cömert tutulur: 30 çok düşüktü (küçük bir
+    // ofiste 30 sayfa yüklemesi 5 dakikada meşru kullanıcıları kilitliyordu).
     opt.AddPolicy("refresh", ctx => RateLimitPartition.GetFixedWindowLimiter(
         ClientKey(ctx), _ => new FixedWindowRateLimiterOptions
         {
-            PermitLimit = 30,
+            PermitLimit = 120,
+            Window = TimeSpan.FromMinutes(5),
+            QueueLimit = 0,
+        }));
+
+    // logout — kaba kuvvetle bir anlamı yok (yalnızca oturumu kapatır), ama
+    // "auth" kovasında olması onu login/register/forgot ile aynı 10'luk IP
+    // kotasına sokuyordu; ofisin onbirinci çıkışı ya da girişi 429 alıyordu.
+    // Kendi cömert IP kovasına alınır — refresh ile aynı boyutta.
+    opt.AddPolicy("logout", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ClientKey(ctx), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 120,
             Window = TimeSpan.FromMinutes(5),
             QueueLimit = 0,
         }));
