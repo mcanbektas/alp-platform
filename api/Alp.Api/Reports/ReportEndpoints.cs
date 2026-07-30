@@ -98,7 +98,7 @@ public static class ReportEndpoints
         var projectName = await OwnedProjectName(db, id, userId);
         if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
 
-        var payload = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date, req.Labels);
+        var payload = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date, req.Labels, req.Lang ?? "tr");
         if (payload is null)
         {
             // Projede hiç kayıtlı rapor bölümü yok — indirmenin üretecek verisi
@@ -269,7 +269,7 @@ public static class ReportEndpoints
 
         var payload = await ProjectPayload(
             db, report.ProjectId.Value, userId, report.Title, report.PreparedBy,
-            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture), req.Labels);
+            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture), req.Labels, req.Lang ?? "tr");
 
         if (payload is null)
         {
@@ -306,7 +306,7 @@ public static class ReportEndpoints
     // ayrışır ve aynı proje iki yoldan farklı belge verirdi.
     private static async Task<ReportPayload?> ProjectPayload(
         AppDbContext db, Guid projectId, string userId, string title, string preparedBy, string date,
-        ReportLabels labels)
+        ReportLabels labels, string lang)
     {
         var stored = await db.Calculations
             .Where(c => c.ProjectId == projectId && c.ReportJson != null)
@@ -318,7 +318,7 @@ public static class ReportEndpoints
         var schemaVersion = 0;
         foreach (var row in stored)
         {
-            var section = TryReadSection(row.ReportJson!);
+            var section = StoredSection.Read(row.ReportJson, lang);
             // Bozuk/eski bir bölüm sessizce atlanır — bir hesabın kaydı
             // diğerlerinin raporunu engellemez.
             if (section is null) continue;
@@ -336,23 +336,6 @@ public static class ReportEndpoints
         return new ReportPayload(schemaVersion, title, preparedBy, company, date, labels, sections);
     }
 
-    // Kaydedilmiş bölüm istemcinin ürettiği camelCase JSON'dur; `JsonSerializer`
-    // web varsayılanlarıyla okunur (uçların gövde ayrıştırmasıyla aynı kural).
-    // Bozuk JSON istisna fırlatmaz, `null` döner: tek bozuk kayıt bütün raporu
-    // düşürmemeli.
-    private static ReportSection? TryReadSection(string json)
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<ReportSection>(json, SectionJsonOptions);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static readonly JsonSerializerOptions SectionJsonOptions = new(JsonSerializerDefaults.Web);
 
     private const string PdfContentType = "application/pdf";
 
@@ -475,4 +458,4 @@ public record ReportSummary(Guid Id, string Title, string PreparedBy, ReportForm
 
 // Kütükten yeniden indirme gövdesi — yalnız çerçeve metni taşır; künye
 // (başlık, hazırlayan, tarih) kaydın kendisinden okunur.
-public record ReportLabelsRequest(ReportLabels Labels);
+public record ReportLabelsRequest(ReportLabels Labels, string? Lang);

@@ -10,6 +10,12 @@ namespace Alp.Api.Tests;
 // taşındı, testleri taşınmadı — burada karşılıkları var.
 public class ReportPreviewTests
 {
+    // Önizleme artık dil seçiyor (kayıt bölümü her dilde saklanıyor, bkz.
+    // StoredSection). Bu sınıfın sınadığı kural dil değil süzme mantığı;
+    // çağrılar tek yerden sabit dille geçer.
+    private static (IReadOnlyList<PreviewField> Rows, string? Mode) From(string? reportJson) =>
+        ReportPreview.From(reportJson, "tr");
+
     private static string Json(object payload) =>
         JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web));
 
@@ -19,7 +25,7 @@ public class ReportPreviewTests
     [InlineData("   ")]
     public void Bos_yuk_bos_onizleme_verir(string? reportJson)
     {
-        var (rows, mode) = ReportPreview.From(reportJson);
+        var (rows, mode) = From(reportJson);
 
         Assert.Empty(rows);
         Assert.Null(mode);
@@ -30,7 +36,7 @@ public class ReportPreviewTests
     {
         // Eski/bozuk bir bölüm satırı istisna fırlatmaz: kayıt önizlemesiz
         // görünür ama listeden düşmez ve hâlâ açılabilir.
-        var (rows, mode) = ReportPreview.From("{ bu json değil");
+        var (rows, mode) = From("{ bu json değil");
 
         Assert.Empty(rows);
         Assert.Null(mode);
@@ -39,7 +45,7 @@ public class ReportPreviewTests
     [Fact]
     public void Results_yoksa_mod_yine_doner()
     {
-        var (rows, mode) = ReportPreview.From(Json(new { toolName = "Yol Genişliği", mode = "Analiz" }));
+        var (rows, mode) = From(Json(new { toolName = "Yol Genişliği", mode = "Analiz" }));
 
         Assert.Empty(rows);
         Assert.Equal("Analiz", mode);
@@ -48,7 +54,7 @@ public class ReportPreviewTests
     [Fact]
     public void Vurgulanan_satir_basa_alinir()
     {
-        var (rows, _) = ReportPreview.From(Json(new
+        var (rows, _) = From(Json(new
         {
             results = new object[]
             {
@@ -65,7 +71,7 @@ public class ReportPreviewTests
     [Fact]
     public void En_fazla_iki_satir_doner()
     {
-        var (rows, _) = ReportPreview.From(Json(new
+        var (rows, _) = From(Json(new
         {
             results = Enumerable.Range(1, 9)
                 .Select(i => new { label = $"Alan {i}", value = i.ToString(), unit = (string?)null, emphasis = false })
@@ -80,7 +86,7 @@ public class ReportPreviewTests
     [Fact]
     public void Iki_vurgulu_satir_vurgusuzlari_tamamen_iter()
     {
-        var (rows, _) = ReportPreview.From(Json(new
+        var (rows, _) = From(Json(new
         {
             results = new object[]
             {
@@ -96,7 +102,7 @@ public class ReportPreviewTests
     [Fact]
     public void Etiketi_ya_da_degeri_okunamayan_satir_atlanir()
     {
-        var (rows, _) = ReportPreview.From(Json(new
+        var (rows, _) = From(Json(new
         {
             results = new object?[]
             {
@@ -116,7 +122,7 @@ public class ReportPreviewTests
     [Fact]
     public void Uzun_metin_80_karakterde_kirpilir()
     {
-        var (rows, _) = ReportPreview.From(Json(new
+        var (rows, _) = From(Json(new
         {
             results = new object[]
             {
@@ -134,7 +140,7 @@ public class ReportPreviewTests
     [Fact]
     public void Bastaki_ve_sondaki_bosluk_atilir()
     {
-        var (rows, mode) = ReportPreview.From(Json(new
+        var (rows, mode) = From(Json(new
         {
             mode = "  Sentez  ",
             results = new object[] { new { label = "  Ad  ", value = "  1  ", unit = "  mm  ", emphasis = false } },
@@ -154,7 +160,7 @@ public class ReportPreviewTests
         // kalır. Bir gün `results` yerine bütün bölüm dolaşılırsa 60 hesaplı
         // proje yanıtı yine yüz KB'lara çıkar.
         var svg = $"<svg viewBox=\"0 0 10 10\">{new string('x', 5000)}</svg>";
-        var (rows, _) = ReportPreview.From(Json(new
+        var (rows, _) = From(Json(new
         {
             schematicSvg = svg,
             schematicCaption = "Şema",
@@ -173,7 +179,7 @@ public class ReportPreviewTests
     public void Girdiler_onizlemeye_girmez()
     {
         // Yalnız `results` okunur; `inputs` boş bir önizleme demektir.
-        var (rows, _) = ReportPreview.From(Json(new
+        var (rows, _) = From(Json(new
         {
             inputs = new object[] { new { label = "Akım", value = "2.5", unit = "A", emphasis = true } },
             results = Array.Empty<object>(),

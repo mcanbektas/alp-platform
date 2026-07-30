@@ -81,7 +81,9 @@ public static class ProjectEndpoints
             new ProjectSummary(project.Id, project.Name, project.Description, project.CreatedAt, project.UpdatedAt, 0));
     }
 
-    internal static async Task<IResult> GetProject(Guid id, AppDbContext db, HttpContext http)
+    // `lang`: önizleme satırları kayıttaki dil haritasından seçilir (bkz.
+    // StoredSection). Verilmezse Türkçeye düşer — eski istemci kırılmaz.
+    internal static async Task<IResult> GetProject(Guid id, AppDbContext db, HttpContext http, string? lang = null)
     {
         var (owned, error) = await LoadOwnedProject(db, http, id);
         if (error is not null) return error;
@@ -102,7 +104,7 @@ public static class ProjectEndpoints
 
         var calculations = stored.Select(c =>
         {
-            var (preview, mode) = ReportPreview.From(c.ReportJson);
+            var (preview, mode) = ReportPreview.From(c.ReportJson, lang ?? "tr");
             return new CalculationSummaryDto(
                 c.Id, c.ToolKey, c.ToolMode, c.SortOrder,
                 preview, mode, c.ReportJson is not null,

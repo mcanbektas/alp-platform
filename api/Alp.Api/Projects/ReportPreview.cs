@@ -24,21 +24,14 @@ public static class ReportPreview
 
     private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web);
 
-    public static (IReadOnlyList<PreviewField> Rows, string? Mode) From(string? reportJson)
+    // `lang`: kayıt artık bölümü her dilde taşıyor (bkz. StoredSection); liste
+    // önizlemesi de arayüz dilinde okunmalı, yoksa İngilizce arayüzde Türkçe
+    // etiketler görünür. Bozuk/eski kayıt satırı düşürmez, yalnızca
+    // önizlemesiz gösterilir — kaydın kendisi hâlâ açılabilir olmalı.
+    public static (IReadOnlyList<PreviewField> Rows, string? Mode) From(string? reportJson, string lang)
     {
-        if (string.IsNullOrWhiteSpace(reportJson)) return ([], null);
-
-        ReportSection? section;
-        try
-        {
-            section = JsonSerializer.Deserialize<ReportSection>(reportJson, Options);
-        }
-        catch (JsonException)
-        {
-            // Bozuk/eski bir bölüm satırı düşürmez, yalnızca önizlemesiz
-            // gösterilir — kaydın kendisi hâlâ açılabilir olmalı.
-            return ([], null);
-        }
+        var section = StoredSection.Read(reportJson, lang);
+        if (section is null) return ([], null);
 
         if (section?.Results is null) return ([], Text(section?.Mode));
 

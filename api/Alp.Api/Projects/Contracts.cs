@@ -89,7 +89,9 @@ public record ProjectDetailResponse(
 // `Labels`: belgenin çerçeve metni. Bölümleri sunucu kendi kaydından toplar ama
 // başlıkları toplayamaz — sunucuda kullanıcı metni yoktur (§5.1). Karşılığı
 // `web/src/data/reportText.js` → `reportLabels(lang)`.
-public record ProjectReportRequest(string Title, string PreparedBy, string Date, ReportLabels Labels);
+// `Lang`: METİN DEĞİL, ANAHTAR. Kayıt bölümü her dilde taşıyor; sunucu hangi
+// dalı okuyacağını buradan öğrenir. Kullanıcı metni yine sunucuya girmez.
+public record ProjectReportRequest(string Title, string PreparedBy, string Date, ReportLabels Labels, string? Lang);
 
 public record CreateCalculationRequest(
     string ToolKey,
