@@ -50,7 +50,7 @@ public class SvgSizeGateTests
             "Inputs", "Results", "Equations", "Notes", "Chart data",
             "chart hint", "hint single", "hint many",
             "schematic failed", "chart failed");
-        var payload = new ReportPayload(1, "Test", "Test", null, "2026-07-30", labels, [section]);
+        var payload = new ReportPayload(1, "Test", "Test", null, "2026-07-30", labels, "tr", [section]);
         return (builder.Build(payload), errors);
     }
 

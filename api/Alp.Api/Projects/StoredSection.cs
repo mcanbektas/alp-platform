@@ -40,6 +40,21 @@ public static class StoredSection
         "schematicSvg", "schematicCaption", "chart",
     ];
 
+    // Bölümün dizi alanları JSON'da BULUNMAYABİLİR ve `JsonSerializer` o zaman
+    // `null` bırakır — tip imzası `IReadOnlyList` dese bile. Dizgiciler bu
+    // dizileri doğrudan sayıyor, yani eksik alanlı tek bir kayıt bütün projenin
+    // raporunu `NullReferenceException` ile 500'e düşürüyordu. Kural bunun tam
+    // tersi: bozuk kayıt yalnızca KENDİ satırını kaybettirir. Boş listeye
+    // çevirmek o kaydı da kurtarır — eksik blok yazılmaz, belge basılır.
+    private static ReportSection? Normalize(ReportSection? section) =>
+        section is null ? null : section with
+        {
+            Inputs = section.Inputs ?? [],
+            Formula = section.Formula ?? [],
+            Results = section.Results ?? [],
+            Notes = section.Notes ?? [],
+        };
+
     private static bool LooksLikeSection(JsonElement root)
     {
         foreach (var field in SectionFields)
@@ -62,19 +77,19 @@ public static class StoredSection
             // Eski şekil: bölümün kendisi kökte.
             if (LooksLikeSection(root))
             {
-                return root.Deserialize<ReportSection>(Options);
+                return Normalize(root.Deserialize<ReportSection>(Options));
             }
 
             if (root.TryGetProperty(lang, out var wanted) && wanted.ValueKind == JsonValueKind.Object)
             {
-                return wanted.Deserialize<ReportSection>(Options);
+                return Normalize(wanted.Deserialize<ReportSection>(Options));
             }
 
             foreach (var property in root.EnumerateObject())
             {
                 if (property.Value.ValueKind == JsonValueKind.Object)
                 {
-                    return property.Value.Deserialize<ReportSection>(Options);
+                    return Normalize(property.Value.Deserialize<ReportSection>(Options));
                 }
             }
 

@@ -11,6 +11,11 @@ public record ReportPayload(
     string? Company,
     string Date,
     ReportLabels Labels,
+    // Belgenin dili. METİN DEĞİL, ANAHTAR ('tr' | 'en'): dizgici bunu hiç
+    // basmaz, yalnızca dosya adına yazılır ki aynı belgenin iki dili aynı
+    // klasörde birbirini ezmesin. Metin yine yalnızca `Labels`ta ve
+    // bölümlerde, ikisi de tarayıcıdan geliyor.
+    string? Lang,
     IReadOnlyList<ReportSection> Sections
 );
 

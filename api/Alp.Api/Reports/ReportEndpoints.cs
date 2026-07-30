@@ -293,7 +293,7 @@ public static class ReportEndpoints
         // Ad, üretim yolundaki kuralın proje dalıyla aynı: projeyi ayırt eden
         // şey adıdır, `Title` bütün raporlarda aynı sabittir ("DONANIM RAPORU").
         var basis = string.IsNullOrWhiteSpace(report.ProjectName) ? report.Title : report.ProjectName;
-        var name = $"{Slugify(basis)}-{IsoDate(report.GeneratedAt)}.{ext}";
+        var name = $"{Slugify(basis)}-{IsoDate(report.GeneratedAt)}{LangSuffix(req.Lang)}.{ext}";
         return Results.File(bytes, contentType, name);
     }
 
@@ -333,7 +333,7 @@ public static class ReportEndpoints
             .Select(u => u.Company)
             .FirstOrDefaultAsync();
 
-        return new ReportPayload(schemaVersion, title, preparedBy, company, date, labels, sections);
+        return new ReportPayload(schemaVersion, title, preparedBy, company, date, labels, lang, sections);
     }
 
 
@@ -344,6 +344,11 @@ public static class ReportEndpoints
 
     private static ApiError? Validate(ReportPayload payload)
     {
+        // `Sections` gövdede hiç gelmemiş olabilir; `IReadOnlyList` imzası bunu
+        // engellemez, `JsonSerializer` alanı `null` bırakır. Sayısını okumadan
+        // önce bakılır, yoksa geçersiz bir gövde 400 yerine 500 verirdi.
+        if (payload.Sections is null) return new ApiError("EMPTY_PAYLOAD");
+        if (payload.Labels is null) return new ApiError("MISSING_FIELDS", new { field = "labels" });
         if (payload.Sections.Count == 0) return new ApiError("EMPTY_PAYLOAD");
         if (string.IsNullOrWhiteSpace(payload.Title)) return new ApiError("MISSING_FIELDS", new { field = "title" });
         if (string.IsNullOrWhiteSpace(payload.PreparedBy)) return new ApiError("MISSING_FIELDS", new { field = "preparedBy" });
@@ -395,7 +400,7 @@ public static class ReportEndpoints
             : payload.Sections.Count == 1 ? payload.Sections[0].ToolName
             : payload.Title;
 
-        return $"{Slugify(basis)}-{FileDate(payload.Date, record.GeneratedAt)}.{ext}";
+        return $"{Slugify(basis)}-{FileDate(payload.Date, record.GeneratedAt)}{LangSuffix(payload.Lang)}.{ext}";
     }
 
     // Belgenin İÇİNE yazılan tarih tarayıcıdan gelir (kullanıcının yerel günü,
@@ -408,6 +413,15 @@ public static class ReportEndpoints
             DateTimeStyles.None, out var parsed)
             ? parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             : IsoDate(fallback);
+
+    // Dosya adının sonundaki dil eki. Aynı projenin Türkçe ve İngilizce
+    // raporu aynı klasöre indirildiğinde ikincisi birincisini ezmesin ve
+    // hangisinin hangisi olduğu adından okunsun diye. Yalnızca harf kabul
+    // edilir: değer istemciden geliyor ve dosya adına giriyor.
+    private static string LangSuffix(string? lang) =>
+        !string.IsNullOrWhiteSpace(lang) && lang.All(char.IsAsciiLetter)
+            ? $"-{lang.ToLowerInvariant()}"
+            : string.Empty;
 
     // ISO sıralanabilir: dosya yöneticisinde ada göre sıralama tarihe göre
     // sıralama demek olur.
