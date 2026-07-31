@@ -94,6 +94,14 @@ cp .env.example .env
 | `SMTP_*` | **Zorunlu** — aşağıya bakın |
 | `CERTBOT_EMAIL` | Sertifika bildirimleri |
 
+> **Alan adı alınınca eklenecek:** `VITE_SITE_URL` henüz `.env`'de yok.
+> `web/scripts/build-sitemap.mjs` `dist/sitemap.xml`'i bu değişkenden üretir;
+> tanımsızken placeholder alan adıyla üretir ve uyarı basar. Alan adı
+> alınınca `.env`'e eklenir ve web derlemesine geçilir (`web/Dockerfile`'daki
+> `VITE_API_BASE_URL` notuyla aynı desen). `robots.txt`'teki `Sitemap:` satırı
+> göreli değil TAM url ister ve statik dosya olduğu için build zamanı
+> değişkeninden gelemez — o satır da aynı günde elle eklenir.
+
 > **SMTP olmadan canlıya çıkılmaz.** E-posta doğrulaması zorunludur
 > (`SignIn.RequireConfirmedEmail`); doğrulama postası gitmezse **hiçbir kullanıcı
 > giriş yapamaz**. SMTP yapılandırılmamışsa uygulama açılışta uyarı basar ama
