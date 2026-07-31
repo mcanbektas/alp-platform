@@ -101,6 +101,12 @@ services:
     build:
       context: ..
       dockerfile: web/Dockerfile
+      args:
+        # DERLEME zamanı değeri: sitemap.xml ve sayfaların canonical/hreflang
+        # etiketleri statik dosyalara yazılır, çalışma zamanında değiştirilemez.
+        # Boşsa placeholder alan adı yazılır ve derleme uyarı basar.
+        # Değeri değiştirdikten sonra `--build` şart.
+        VITE_SITE_URL: ${VITE_SITE_URL:-}
     restart: unless-stopped
     logging: *default-logging
     # Statik dosya + ters vekil — nginx'e bu kadarı bol bile.
