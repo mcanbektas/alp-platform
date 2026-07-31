@@ -319,17 +319,33 @@ public static class ProjectEndpoints
 
     internal static async Task<IResult> DeleteCalculation(Guid id, AppDbContext db, HttpContext http)
     {
-        var (calculation, error) = await LoadOwnedCalculation(db, http, id);
-        if (error is not null) return error;
+        var userId = RequireUserId(http, out var error);
+        if (error is not null) return error!;
 
-        calculation!.Project!.UpdatedAt = DateTimeOffset.UtcNow;
-        db.Calculations.Remove(calculation);
-        await db.SaveChangesAsync();
+        // Silmek için satırın İÇERİĞİ gerekmez: LoadOwnedCalculation tam
+        // varlığı (ReportJson + gömülü SVG, 2 MB'a dek) belleğe çekiyordu.
+        // Sahiplik yalnızca kimliklerle doğrulanır; 404 şekli diğer uçlarla
+        // birebir aynı kalır (yok / başkasının — ayrım sızmaz).
+        var owned = await db.Calculations
+            .Where(c => c.Id == id && c.Project!.UserId == userId)
+            .Select(c => new { c.Id, c.ProjectId })
+            .FirstOrDefaultAsync();
+        if (owned is null) return Results.NotFound(new ApiError("CALCULATION_NOT_FOUND"));
+
+        // `UtcNow` sorgu içinde çağrılmaz: SQLite sağlayıcısı (testler) onu
+        // çeviremiyor; değer önce yakalanır, sorguya sabit girer.
+        var now = DateTimeOffset.UtcNow;
+        await db.Calculations.Where(c => c.Id == owned.Id).ExecuteDeleteAsync();
+        await db.Projects
+            .Where(p => p.Id == owned.ProjectId)
+            .ExecuteUpdateAsync(s => s.SetProperty(p => p.UpdatedAt, now));
 
         return Results.NoContent();
     }
 
-    private static async Task<IResult> ReorderCalculations(Guid id, ReorderCalculationsRequest req, AppDbContext db, HttpContext http)
+    // `internal`: küme-eşitliği kontrolü bir güvenlik kuralıdır (yabancı hesap
+    // kimliği sızamaz) ve doğrudan test edilir — GetProject'teki kalıpla aynı.
+    internal static async Task<IResult> ReorderCalculations(Guid id, ReorderCalculationsRequest req, AppDbContext db, HttpContext http)
     {
         var (project, error) = await LoadOwnedProject(db, http, id);
         if (error is not null) return error;

@@ -293,6 +293,18 @@ public class XlsxReportBuilder
     // Sayı BİÇİMİ verilmez. Değerler zaten ekrandaki anlamlı basamağıyla
     // geliyor (0.01051 gibi); sabit bir biçim uygulamak onları yuvarlayıp
     // gösterir ve hücrede görünen değer ile gerçek değer ayrışırdı.
+    // Formül injection sigortası: ClosedXML `cell.Value = string` atamasını
+    // metin hücresi yapar, formül DEĞİL — bugün canlı bir açık yok. Önek yine
+    // de konur: kullanıcı bu dosyayı Excel'den CSV'ye aktarıp yeniden açarsa
+    // `=`, `+`, `-`, `@` ile başlayan metin O AŞAMADA formüle dönüşür.
+    // Kullanıcı verisi (etiketler, proje adı) hücreye buradan giriyor.
+    private static readonly char[] FormulaLeadIns = ['=', '+', '@'];
+
+    internal static string GuardFormulaLeadIn(string raw) =>
+        raw.Length > 0 && (FormulaLeadIns.Contains(raw[0]) || (raw[0] == '-' && raw.Length > 1 && !char.IsDigit(raw[1])))
+            ? "'" + raw
+            : raw;
+
     private static void WriteValue(IXLCell cell, string raw)
     {
         if (double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var n))
@@ -301,7 +313,7 @@ public class XlsxReportBuilder
         }
         else
         {
-            cell.Value = raw;
+            cell.Value = GuardFormulaLeadIn(raw);
         }
     }
 
@@ -328,7 +340,7 @@ public class XlsxReportBuilder
     // Kesme KELİME SINIRINDA yapılır: ham kesme "1 Yol Genişliği ve Akım Kapasit"
     // gibi yarım kelimeyle bitiyordu. Sınırdan önce boşluk yoksa ham kesmeye
     // düşülür — ad üretilemeden kalmaz.
-    private static string SanitizeSheetName(string name, string fallback)
+    internal static string SanitizeSheetName(string name, string fallback)
     {
         var cleaned = new string(name.Select(c => ":\\/?*[]".Contains(c) ? '-' : c).ToArray()).Trim();
         if (cleaned.Length <= 31) return cleaned.Length > 0 ? cleaned : fallback;

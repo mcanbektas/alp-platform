@@ -5,6 +5,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Alp.Api ile aynı gerekçe: saf yardımcılar (SanitizeSheetName,
+         GuardFormulaLeadIn) HTTP yığını kurulmadan doğrudan test edilir. -->
+    <InternalsVisibleTo Include="Alp.Api.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="ClosedXML" Version="0.105.1" />
     <PackageReference Include="QuestPDF" Version="2026.7.1" />
   </ItemGroup>

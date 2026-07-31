@@ -22,8 +22,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddOpenApi();
 
 // ---- Veritabanı ----
+// EnableRetryOnFailure: konteyner ağında anlık kopmalar (postgres yeniden
+// başlarken, DNS tazelenirken) tek istekte 500 üretmesin — geçici hata
+// birkaç kez otomatik yeniden denenir.
 builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseNpgsql(builder.Configuration.GetConnectionString("Default")));
+    opt.UseNpgsql(
+        builder.Configuration.GetConnectionString("Default"),
+        npgsql => npgsql.EnableRetryOnFailure(maxRetryCount: 3)));
 
 // ---- Identity ----
 // Parola özeti, kilitlenme, e-posta doğrulama Identity'den gelir — elle
@@ -229,6 +234,18 @@ builder.Services.AddRateLimiter(opt =>
             QueueLimit = 0,
         }));
 
+    // Hazırlık ucu (/api/health/ready) her istekte veritabanı bağlantısı
+    // açar ve kimliksizdir — büsbütün sınırsız bırakmak ucuz bir yükseltme
+    // hedefi olurdu. Konteyner sağlık kontrolü ve harici bir monitör için
+    // bolca cömert, kasıtlı sel için yeterince dar.
+    opt.AddPolicy("health", ctx => RateLimitPartition.GetFixedWindowLimiter(
+        ClientKey(ctx), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 30,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+
     // Oturum açmış kullanıcının yazma uçları (profil, kayıtlar). Rapor kadar
     // pahalı değiller ama hepsi veritabanına yazıyor; sınırsız bırakıldığında
     // tek hesap sürekli yazma üretebilir. Kullanıcı bazlı: bir hesabın
@@ -318,7 +335,31 @@ var app = builder.Build();
 if (builder.Configuration.GetValue("Database:MigrateOnStartup", false))
 {
     using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
+    var database = scope.ServiceProvider.GetRequiredService<AppDbContext>().Database;
+
+    // Advisory lock: bayrak tek kopya için belgelendi ama tek koruma bayraktı.
+    // Kopya sayısı yanlışlıkla artarsa iki süreç migration'ı aynı anda koşmaz —
+    // ikincisi kilidi bekler, birincisi bitirince şemayı hazır bulur. Kilit
+    // yalnızca Postgres'te var; testlerin SQLite'ı bu yoldan geçmiyor.
+    var isNpgsql = database.ProviderName?.Contains("Npgsql", StringComparison.Ordinal) == true;
+    if (isNpgsql)
+    {
+        await database.OpenConnectionAsync();
+        try
+        {
+            await database.ExecuteSqlRawAsync("SELECT pg_advisory_lock(727274)");
+            await database.MigrateAsync();
+        }
+        finally
+        {
+            await database.ExecuteSqlRawAsync("SELECT pg_advisory_unlock(727274)");
+            await database.CloseConnectionAsync();
+        }
+    }
+    else
+    {
+        await database.MigrateAsync();
+    }
 }
 
 // Rapor yazı tipleri (Faz 3b). Konteynerde yol `Reports__FontsPath` ile verilir
@@ -439,12 +480,13 @@ app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }))
     .AllowAnonymous()
     .DisableRateLimiting();
 
+// Liveness'ın aksine sınırsız DEĞİL: bu uç her istekte DB bağlantısı açıyor.
 app.MapGet("/api/health/ready", async (AppDbContext db, CancellationToken ct) =>
         await db.Database.CanConnectAsync(ct)
             ? Results.Ok(new { status = "ready" })
             : Results.StatusCode(StatusCodes.Status503ServiceUnavailable))
     .AllowAnonymous()
-    .DisableRateLimiting();
+    .RequireRateLimiting("health");
 
 app.MapAuthEndpoints();
 app.MapReportEndpoints();

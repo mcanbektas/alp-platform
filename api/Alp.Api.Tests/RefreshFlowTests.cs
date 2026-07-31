@@ -123,10 +123,23 @@ public class RefreshFlowTests
     }
 
     [Fact]
-    public async Task Pencere_disinda_tekrar_sunum_zinciri_iptal_eder()
+    public async Task Pencere_disinda_tekrar_sunum_kullanicinin_tum_oturumlarini_iptal_eder()
     {
         using var db = new TestDb();
-        var (_, raw, row) = Seed(db);
+        var (user, raw, row) = Seed(db);
+
+        // Aynı kullanıcının BAĞIMSIZ ikinci bir oturumu (ayrı login) — çalıntı
+        // tespitinde o da düşmeli; yalnız zincir iptali onu yaşatıyordu.
+        var otherSession = new RefreshToken
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            TokenHash = Tokens.Hash(Tokens.CreateRefreshToken()),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        db.Db.RefreshTokens.Add(otherSession);
+        db.Db.SaveChanges();
 
         await AuthEndpoints.Refresh(Tokens, db.NewContext(), WithCookie(raw), new FakeEnv());
 
@@ -141,12 +154,10 @@ public class RefreshFlowTests
 
         Assert.Equal(StatusCodes.Status401Unauthorized, ResultAssert.Status(replay));
 
-        // Hırsızın elindeki zincirin ucundaki AKTİF halka da iptal edilmiş
-        // olmalı — saldırgan döndürülmüş token üzerinden oturuma tutunamaz.
+        // Kullanıcının HİÇBİR aktif token'ı kalmamalı: hırsızın zinciri de,
+        // bağımsız ikinci oturum da iptal.
         var fresh = db.NewContext();
-        var old = fresh.RefreshTokens.Single(t => t.Id == row.Id);
-        var replacement = fresh.RefreshTokens.Single(t => t.TokenHash == old.ReplacedByHash);
-        Assert.NotNull(replacement.RevokedAt);
+        Assert.Empty(fresh.RefreshTokens.Where(t => t.UserId == user.Id && t.RevokedAt == null).ToList());
     }
 
     [Fact]

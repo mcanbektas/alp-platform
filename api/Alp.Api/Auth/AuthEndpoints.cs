@@ -251,7 +251,15 @@ public static class AuthEndpoints
             // tutulur — çalınan bir token'ın kullanılabildiği süre bu kadardır.
             if (now - existing.RevokedAt.Value > RotationGrace)
             {
-                await RevokeDescendantChain(db, existing, now);
+                // Pencere dışı tekrar = çalıntı kanıtı. Yalnızca zinciri değil,
+                // kullanıcının BÜTÜN aktif oturumları iptal edilir: token bir
+                // kez çalındıysa aynı istemcinin başka oturumları da şüphelidir
+                // ve zincir iptali saldırganın önceden açtığı ikinci bir
+                // oturumu (ayrı login) yaşatıyordu. Meşru kullanıcı bedeli
+                // yeniden giriş yapmaktır — çalıntı sonrası doğru bedel.
+                await db.RefreshTokens
+                    .Where(t => t.UserId == existing.UserId && t.RevokedAt == null)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.RevokedAt, now));
                 ClearRefreshCookie(http);
             }
             // Pencere içindeyse ÇEREZ SİLİNMEZ. Çerez sekmeler arasında
@@ -313,25 +321,6 @@ public static class AuthEndpoints
         var access = tokenService.CreateAccessToken(existing.User);
         SetRefreshCookie(http, newRaw, now.Add(tokenService.RefreshTokenLifetime), env, existing.Persistent);
         return Results.Ok(new LoginResponse(access.Value, access.ExpiresAt));
-    }
-
-    // Döndürme zincirinde ileri yürüyüp hâlâ aktif olan halkayı iptal eder.
-    // `guard`, bozuk/döngüsel veriye karşı sonlu adım sayısı garantisidir.
-    private static async Task RevokeDescendantChain(AppDbContext db, RefreshToken start, DateTimeOffset now)
-    {
-        var cursor = start;
-        var guard = 0;
-        while (cursor.ReplacedByHash is not null && guard++ < 50)
-        {
-            var next = await db.RefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == cursor.ReplacedByHash);
-            if (next is null) break;
-            if (next.RevokedAt is null)
-            {
-                next.RevokedAt = now;
-                await db.SaveChangesAsync();
-            }
-            cursor = next;
-        }
     }
 
     private static async Task<IResult> Logout(ITokenService tokenService, AppDbContext db, HttpContext http)

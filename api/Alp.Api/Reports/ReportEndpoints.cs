@@ -80,14 +80,11 @@ public static class ReportEndpoints
     // aynı mertebede, çok bölümlü olduğu için biraz üstünde.
     private const long ProjectReportSourceBudgetChars = 8 * 1024 * 1024;
 
-    private static async Task<IResult> GenerateProjectPdf(
-        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, PdfReportBuilder builder)
-    {
-        var userId = CurrentUserId(http);
-        if (userId is null) return Results.Unauthorized();
-
-        return await GenerateProjectReport(id, req, db, http, ReportFormat.Pdf, builder.Build);
-    }
+    // Kimlik denetimi delegede (GenerateProjectReport) — burada tekrarı
+    // ölü koddu, XLSX kardeşi de zaten taşımıyor.
+    private static Task<IResult> GenerateProjectPdf(
+        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, PdfReportBuilder builder) =>
+        GenerateProjectReport(id, req, db, http, ReportFormat.Pdf, builder.Build);
 
     private static Task<IResult> GenerateProjectXlsx(
         Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, XlsxReportBuilder builder) =>
@@ -456,7 +453,7 @@ public static class ReportEndpoints
     // sunucunun UTC saatine düşülürse gece yarısı ile 03:00 arasında dosya adı
     // ile belgenin üstündeki tarih farklı gün gösterirdi. Ayrıştırılamayan bir
     // değer geldiğinde kayıt zamanına düşülür — ad her hâlükârda üretilir.
-    private static string FileDate(string payloadDate, DateTimeOffset fallback) =>
+    internal static string FileDate(string payloadDate, DateTimeOffset fallback) =>
         DateTime.TryParseExact(payloadDate, "dd.MM.yyyy", CultureInfo.InvariantCulture,
             DateTimeStyles.None, out var parsed)
             ? parsed.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
@@ -466,7 +463,7 @@ public static class ReportEndpoints
     // raporu aynı klasöre indirildiğinde ikincisi birincisini ezmesin ve
     // hangisinin hangisi olduğu adından okunsun diye. Yalnızca harf kabul
     // edilir: değer istemciden geliyor ve dosya adına giriyor.
-    private static string LangSuffix(string? lang) =>
+    internal static string LangSuffix(string? lang) =>
         !string.IsNullOrWhiteSpace(lang) && lang.All(char.IsAsciiLetter)
             ? $"-{lang.ToLowerInvariant()}"
             : string.Empty;
@@ -496,7 +493,7 @@ public static class ReportEndpoints
     // dosya yöneticisinde kırpılarak görünür, ayırt etmeyi yine zorlaştırır.
     private const int SlugMaxLength = 60;
 
-    private static string Slugify(string title)
+    internal static string Slugify(string title)
     {
         var sb = new StringBuilder(title.Length);
         foreach (var ch in title)
