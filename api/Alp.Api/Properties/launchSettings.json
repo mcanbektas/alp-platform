@@ -1,11 +1,12 @@
 ﻿{
+  "//": "Port 5289, web/vite.config.js'teki proxy hedefiyle AYNI olmak zorunda. Ayrıştığı gün uygulama açılır ama /api istekleri sessizce 404 döner, yani giriş ve rapor çalışmaz. İkisi birlikte değişir.",
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
     "http": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": false,
-      "applicationUrl": "http://localhost:5031",
+      "applicationUrl": "http://localhost:5289",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
@@ -14,7 +15,7 @@
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": false,
-      "applicationUrl": "https://localhost:7102;http://localhost:5031",
+      "applicationUrl": "https://localhost:7102;http://localhost:5289",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
