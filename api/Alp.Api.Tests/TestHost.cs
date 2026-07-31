@@ -80,7 +80,8 @@ internal sealed class TestDb : IDisposable
         return project;
     }
 
-    public Calculation AddCalculation(Project project, string toolKey = "trace-width", string? reportJson = null)
+    public Calculation AddCalculation(
+        Project project, string toolKey = "trace-width", string? reportJson = null, string? previewJson = null)
     {
         var calculation = new Calculation
         {
@@ -91,6 +92,7 @@ internal sealed class TestDb : IDisposable
             EngineVersion = "test",
             SchemaVersion = 1,
             ReportJson = reportJson,
+            PreviewJson = previewJson,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

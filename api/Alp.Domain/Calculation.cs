@@ -23,6 +23,12 @@ public class Calculation
     public string ResultJson { get; set; } = "{}";
     public string? ReportJson { get; set; }
 
+    // Yazma anında ReportJson'dan türetilen önizleme, dil başına — bkz.
+    // Alp.Api/Projects/ReportPreview.cs (Write/ReadStored). GetProject artık
+    // ReportJson'ın tamamını değil bu küçük kolonu okur; PreviewJson null olan
+    // (göç etmemiş) satırlarda eski yola düşülür.
+    public string? PreviewJson { get; set; }
+
     public string EngineVersion { get; set; } = string.Empty;
     public int SchemaVersion { get; set; }
 

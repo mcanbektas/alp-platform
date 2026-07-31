@@ -112,25 +112,33 @@ public static class ProjectEndpoints
         if (error is not null) return error;
         var project = owned!; // guard geçildi: sahiplenilen proje null değil
 
-        // `ReportJson` yanıta girmez ama önizleme satırları ondan türetildiği
-        // için okunur. Satır içi SVG bu yüzden sunucuda kalır: 60 hesaplı bir
-        // projede yanıt ~955 KB'dan ~30 KB'a iner.
+        // Önizleme artık yazma anında türetilip `PreviewJson`'da duruyor —
+        // okuma yolu onu okur, `ReportJson`'ın tamamını değil. `PreviewJson`
+        // null olan (henüz göç etmemiş) satırlarda eski yola pragmatik geri
+        // düşüş: `LegacyReportJson` yalnız O satırlar için doldurulur, tek
+        // sorguda koşullu seçilerek — bellek maliyeti yalnız göç etmemiş
+        // satırlara ödenir. Satır içi SVG bu sayede sunucuda kalır: 60 hesaplı
+        // bir projede yanıt ~955 KB'dan ~30 KB'a iner.
         var stored = await db.Calculations
             .Where(c => c.ProjectId == id)
             .OrderBy(c => c.SortOrder)
             .Select(c => new
             {
-                c.Id, c.ToolKey, c.ToolMode, c.SortOrder, c.ReportJson,
+                c.Id, c.ToolKey, c.ToolMode, c.SortOrder, c.PreviewJson,
+                LegacyReportJson = c.PreviewJson == null ? c.ReportJson : null,
+                HasReport = c.ReportJson != null,
                 c.EngineVersion, c.SchemaVersion, c.CreatedAt, c.UpdatedAt,
             })
             .ToListAsync();
 
         var calculations = stored.Select(c =>
         {
-            var (preview, mode) = ReportPreview.From(c.ReportJson, lang ?? "tr");
+            var (preview, mode) = c.PreviewJson is not null
+                ? ReportPreview.ReadStored(c.PreviewJson, lang ?? "tr")
+                : ReportPreview.From(c.LegacyReportJson, lang ?? "tr");
             return new CalculationSummaryDto(
                 c.Id, c.ToolKey, c.ToolMode, c.SortOrder,
-                preview, mode, c.ReportJson is not null,
+                preview, mode, c.HasReport,
                 c.EngineVersion, c.SchemaVersion, c.CreatedAt, c.UpdatedAt);
         }).ToList();
 
@@ -237,6 +245,7 @@ public static class ProjectEndpoints
             InputsJson = req.InputsJson,
             ResultJson = req.ResultJson,
             ReportJson = req.ReportJson,
+            PreviewJson = ReportPreview.Write(req.ReportJson),
             EngineVersion = req.EngineVersion,
             SchemaVersion = req.SchemaVersion,
             CreatedAt = now,
@@ -301,7 +310,12 @@ public static class ProjectEndpoints
         if (req.ToolMode is not null) { calculation!.ToolMode = req.ToolMode; changed = true; }
         if (req.InputsJson is not null) { calculation!.InputsJson = req.InputsJson; changed = true; }
         if (req.ResultJson is not null) { calculation!.ResultJson = req.ResultJson; changed = true; }
-        if (req.ReportJson is not null) { calculation!.ReportJson = req.ReportJson; changed = true; }
+        if (req.ReportJson is not null)
+        {
+            calculation!.ReportJson = req.ReportJson;
+            calculation.PreviewJson = ReportPreview.Write(req.ReportJson);
+            changed = true;
+        }
         if (req.EngineVersion is not null) { calculation!.EngineVersion = req.EngineVersion; changed = true; }
         if (req.SchemaVersion is not null) { calculation!.SchemaVersion = req.SchemaVersion.Value; changed = true; }
 

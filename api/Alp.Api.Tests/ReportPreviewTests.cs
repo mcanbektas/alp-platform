@@ -187,4 +187,77 @@ public class ReportPreviewTests
 
         Assert.Empty(rows);
     }
+
+    // ---- Write/ReadStored: PreviewJson kolonunun yazma/okuma çifti ----
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Write_bos_rapor_icin_null_doner(string? reportJson)
+    {
+        Assert.Null(ReportPreview.Write(reportJson));
+    }
+
+    [Fact]
+    public void Write_iki_dil_icin_ayri_onizleme_uretir()
+    {
+        var reportJson = Json(new
+        {
+            tr = new { mode = "Analiz", results = new object[] { new { label = "Genişlik", value = "0.62", unit = "mm", emphasis = true } } },
+            en = new { mode = "Analysis", results = new object[] { new { label = "Width", value = "0.62", unit = "mm", emphasis = true } } },
+        });
+
+        var previewJson = ReportPreview.Write(reportJson);
+
+        var (trRows, trMode) = ReportPreview.ReadStored(previewJson, "tr");
+        var (enRows, enMode) = ReportPreview.ReadStored(previewJson, "en");
+
+        Assert.Equal("Analiz", trMode);
+        Assert.Equal("Genişlik", Assert.Single(trRows).Label);
+        Assert.Equal("Analysis", enMode);
+        Assert.Equal("Width", Assert.Single(enRows).Label);
+    }
+
+    [Fact]
+    public void Write_eski_sekilli_kayitta_iki_dil_ayni_onizlemeyi_tasir()
+    {
+        // Eski şekil (kayıt tek dilde, dil haritası yok): StoredSection.Read
+        // dil parametresini yok sayar, o yüzden Write ürettiği haritada tr/en
+        // aynı içeriği taşır — tek dille kaydedilmiş satır iki dilde de açılır.
+        var reportJson = Json(new { results = new object[] { new { label = "Akım", value = "2.5", unit = "A", emphasis = false } } });
+
+        var previewJson = ReportPreview.Write(reportJson);
+
+        var (trRows, _) = ReportPreview.ReadStored(previewJson, "tr");
+        var (enRows, _) = ReportPreview.ReadStored(previewJson, "en");
+        Assert.Equal("Akım", Assert.Single(trRows).Label);
+        Assert.Equal("Akım", Assert.Single(enRows).Label);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("{ bu json değil")]
+    public void ReadStored_bos_veya_bozuk_yuk_bos_onizleme_verir(string? previewJson)
+    {
+        var (rows, mode) = ReportPreview.ReadStored(previewJson, "tr");
+
+        Assert.Empty(rows);
+        Assert.Null(mode);
+    }
+
+    [Fact]
+    public void ReadStored_istenen_dil_yoksa_eldekine_duser()
+    {
+        // Yalnızca tr ile yazılmış bir PreviewJson (örn. dil eklenmeden önce
+        // kaydedilmiş) — en istenince tr'ye düşer, boş dönmez.
+        var previewJson = Json(new { tr = new { mode = "Sentez", rows = new object[] { new { label = "Kalınlık", value = "35", unit = "µm", emphasis = false } } } });
+
+        var (rows, mode) = ReportPreview.ReadStored(previewJson, "en");
+
+        Assert.Equal("Sentez", mode);
+        Assert.Equal("Kalınlık", Assert.Single(rows).Label);
+    }
 }
