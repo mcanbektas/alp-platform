@@ -5,6 +5,10 @@ public record RegisterRequest(string Email, string Password, string DisplayName)
 // tarayıcı kapanınca biter. Eski istemci gövdesi bu yüzden kırılmaz.
 public record LoginRequest(string Email, string Password, bool RememberMe = false);
 public record ForgotPasswordRequest(string Email);
+// Doğrulama postası kaybolduğunda kendi kendine kurtarma. Bu uç olmadan
+// akış çıkmaz sokaktı: RequireConfirmedEmail açıkken giriş yapılamıyor,
+// ForgotPassword da doğrulanmış e-posta şartı koşuyor.
+public record ResendConfirmationRequest(string Email);
 // Oturum açmış kullanıcının kendi parolasını değiştirmesi. Mevcut parola
 // ZORUNLUDUR: erişim token'ı ele geçirilmiş bir oturum, parolayı da
 // değiştirip hesabı büsbütün devralamasın diye.

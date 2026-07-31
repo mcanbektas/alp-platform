@@ -34,6 +34,7 @@ public static class AuthEndpoints
         group.MapPost("/refresh", Refresh).RequireRateLimiting("refresh");
         group.MapPost("/logout", Logout).RequireRateLimiting("logout");
         group.MapPost("/forgot-password", ForgotPassword).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
+        group.MapPost("/resend-confirmation", ResendConfirmation).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapPost("/reset-password", ResetPassword).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapGet("/confirm-email", ConfirmEmail).RequireRateLimiting("auth");
 
@@ -105,13 +106,46 @@ public static class AuthEndpoints
             return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes }));
         }
 
+        await SendConfirmationMail(user, userManager, emailSender, config);
+
+        return Results.Created();
+    }
+
+    // Register ile ResendConfirmation aynı postayı kurar — bağlantı biçimi
+    // ayrışırsa ikinci posta ilk ekranda açılmaz.
+    private static async Task SendConfirmationMail(
+        ApplicationUser user,
+        UserManager<ApplicationUser> userManager,
+        IEmailSender emailSender,
+        IConfiguration config)
+    {
         var token = await userManager.GenerateEmailConfirmationTokenAsync(user);
         var link = $"{FrontendBaseUrl(config)}/e-posta-dogrula"
             + $"?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";
         await emailSender.SendAsync(user.Email!, "E-posta adresini doğrula",
             $"Hesabını doğrulamak için: <a href=\"{link}\">{link}</a>");
+    }
 
-        return Results.Created();
+    // Doğrulama postası kaybolduğunda tek kurtarma yolu. ForgotPassword ile
+    // aynı numaralandırma sözleşmesi: hesap var/yok/zaten doğrulanmış — yanıt
+    // her durumda aynı 200. Posta yalnızca gerçekten doğrulanmamış bir hesaba
+    // gider; doğrulanmış hesaba tekrar göndermek hem gereksiz hem de "bu adres
+    // kayıtlı ve doğrulanmış" bilgisini postayla bile olsa üretmemeli.
+    internal static async Task<IResult> ResendConfirmation(
+        ResendConfirmationRequest req,
+        UserManager<ApplicationUser> userManager,
+        IEmailSender emailSender,
+        IConfiguration config)
+    {
+        if (string.IsNullOrWhiteSpace(req.Email)) return Results.BadRequest(new ApiError("MISSING_FIELDS"));
+
+        var user = await userManager.FindByEmailAsync(req.Email);
+        if (user is not null && !await userManager.IsEmailConfirmedAsync(user))
+        {
+            await SendConfirmationMail(user, userManager, emailSender, config);
+        }
+
+        return Results.Ok();
     }
 
     // Numaralandırmaya kapalı giriş: hesap yok / parola yanlış / e-posta
@@ -138,6 +172,22 @@ public static class AuthEndpoints
             return Results.Json(new ApiError("INVALID_CREDENTIALS"), statusCode: StatusCodes.Status401Unauthorized);
         }
 
+        // Kilitliyken parola HİÇ değerlendirilmez. Eskiden kilit yalnızca
+        // parola doğru bilindikten sonra kontrol ediliyordu — kilitli hesapta
+        // deneme sınırsız sürebiliyor ve doğru tahmin 423 ile kendini belli
+        // ediyordu (kilit süresince bile bir kahin). Şimdi kilitli hesapta her
+        // deneme, parola doğru olsa da, sıradan INVALID_CREDENTIALS alır:
+        // saldırgan kilit boyunca tek bit öğrenemez. Yanıt şekli hesap-yok /
+        // parola-yanlış ile aynıdır, kilit durumu dışarı sızmaz; meşru
+        // kullanıcı kilidi ancak kilit dolup doğru parolayla girince fark
+        // etmez — kabul edilen bedel, aşağıdaki 423 dalı yalnızca kilidin tam
+        // o istekte oluştuğu dar aralıkta görünür.
+        if (userManager.SupportsUserLockout && await userManager.IsLockedOutAsync(user))
+        {
+            userManager.PasswordHasher.HashPassword(new ApplicationUser(), req.Password);
+            return Results.Json(new ApiError("INVALID_CREDENTIALS"), statusCode: StatusCodes.Status401Unauthorized);
+        }
+
         var passwordOk = await userManager.CheckPasswordAsync(user, req.Password);
         if (!passwordOk)
         {
@@ -160,7 +210,9 @@ public static class AuthEndpoints
         return await IssueSession(user, tokenService, db, http, env, req.RememberMe);
     }
 
-    private static async Task<IResult> Refresh(
+    // `internal`: test durum makinesini (rotasyon, yarış penceresi, zincir
+    // iptali) doğrudan çağırarak sınar — GetProject'teki kalıpla aynı.
+    internal static async Task<IResult> Refresh(
         ITokenService tokenService,
         AppDbContext db,
         HttpContext http,

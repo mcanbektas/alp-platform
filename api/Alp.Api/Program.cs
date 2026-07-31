@@ -84,10 +84,43 @@ builder.Services
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.Key)),
             ClockSkew = TimeSpan.FromSeconds(30),
         };
+        // İmza + süre doğrulaması tek başına şu boşluğu bırakır: parola
+        // sıfırlanınca yenileme token'ları iptal edilir ama ELDEKİ erişim
+        // token'ı süresi dolana dek (15 dk) çalışmaya devam eder. Token'daki
+        // SecurityStamp kayıttakiyle her istekte karşılaştırılır; parola
+        // değişimi damgayı yenilediği için eski token anında düşer. Bedeli
+        // korumalı istek başına bir kullanıcı sorgusudur — kabul edildi,
+        // istekler zaten hemen ardından aynı kaydı iş mantığında okuyor.
+        // Damga istemi OLMAYAN token da reddedilir: aksi hâlde eski/elde
+        // üretilmiş bir token bu kontrolü sessizce atlardı.
+        opt.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async ctx =>
+            {
+                var stamp = ctx.Principal?.FindFirst("AspNet.Identity.SecurityStamp")?.Value;
+                var sub = ctx.Principal?.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+                if (string.IsNullOrEmpty(stamp) || string.IsNullOrEmpty(sub))
+                {
+                    ctx.Fail("security stamp missing");
+                    return;
+                }
+
+                var userManager = ctx.HttpContext.RequestServices
+                    .GetRequiredService<UserManager<ApplicationUser>>();
+                var user = await userManager.FindByIdAsync(sub);
+                if (user is null || !string.Equals(user.SecurityStamp, stamp, StringComparison.Ordinal))
+                {
+                    ctx.Fail("security stamp mismatch");
+                }
+            },
+        };
     });
 
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton<ITokenService, TokenService>();
+// Süresi dolmuş yenileme token'larını periyodik siler — gerekçe sınıfın
+// üstünde. İptal edilmiş ama süresi dolmamış satırlara DOKUNMAZ.
+builder.Services.AddHostedService<RefreshTokenCleanupService>();
 
 // ---- E-posta ----
 // SMTP bilgisi verilmişse gerçek gönderici, verilmemişse konsol göndericisi.
@@ -213,8 +246,20 @@ builder.Services.AddRateLimiter(opt =>
 // ---- CORS ----
 // Yalnızca kendi alan adı. Boş dize de "ayarlanmamış" sayılır — appsettings.json
 // anahtarı boş dize olarak commit eder, `??` yalnızca null'da devreye girer.
+// Üretimde localhost'a DÜŞÜLMEZ: sessiz düşüş, dağıtılmış ön yüzün bütün
+// isteklerinin CORS'ta kesilmesi ve saatlerce yanlış yerde aranan bir arıza
+// demekti. Kısa JWT anahtarıyla aynı kural — erken ve gürültülü dur.
 var frontendOrigin = builder.Configuration["App:FrontendBaseUrl"];
-if (string.IsNullOrWhiteSpace(frontendOrigin)) frontendOrigin = "http://localhost:3000";
+if (string.IsNullOrWhiteSpace(frontendOrigin))
+{
+    if (!builder.Environment.IsDevelopment())
+    {
+        throw new InvalidOperationException(
+            "App:FrontendBaseUrl üretimde zorunlu — CORS izinli origin'i budur. "
+            + "deploy/.env içinde App__FrontendBaseUrl kurun.");
+    }
+    frontendOrigin = "http://localhost:3000";
+}
 builder.Services.AddCors(opt =>
 {
     opt.AddDefaultPolicy(policy =>
@@ -245,6 +290,14 @@ if (!string.IsNullOrWhiteSpace(keysPath))
 }
 
 var logoPath = Path.Combine(builder.Environment.ContentRootPath, "Assets", "logo.png");
+// Açılıştaki tek korumasız dosya okumasıydı: imaj kopyalama adımı düşerse
+// çıplak FileNotFoundException ile çöküyordu. Yine fail-fast — logosuz rapor
+// sessizce üretilmez — ama artık ne eksik ve nereye konacağı söylenir.
+if (!File.Exists(logoPath))
+{
+    throw new InvalidOperationException(
+        $"Rapor logosu bulunamadı: {logoPath}. api/Alp.Api/Assets/logo.png imaja kopyalanmalı (Dockerfile).");
+}
 var logoBytes = File.ReadAllBytes(logoPath);
 // Çözülemeyen bir SVG raporu düşürmez, atlanır — ama sessiz kalmaz: belgede
 // yerine not basılır, sunucuda uyarı olarak görünür. Aksi hâlde raporlar

@@ -24,6 +24,12 @@ public class TokenService(IOptions<JwtOptions> options) : ITokenService
             new Claim(JwtRegisteredClaimNames.Email, user.Email ?? string.Empty),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
             new Claim("name", user.DisplayName),
+            // SecurityStamp parola değişince/sıfırlanınca Identity tarafından
+            // yenilenir. Token'a konur ve her istekte kayıttakiyle
+            // karşılaştırılır (Program.cs → OnTokenValidated): parola
+            // sıfırlamadan sonra çalınmış bir erişim token'ı 15 dakika daha
+            // yaşamasın. Claim adı Identity'nin çerez tarafındaki adla aynı.
+            new Claim("AspNet.Identity.SecurityStamp", user.SecurityStamp ?? string.Empty),
         };
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_opt.Key));
