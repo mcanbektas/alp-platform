@@ -108,12 +108,22 @@ public static class ReportEndpoints
         {
             return Results.BadRequest(new ApiError("TOO_LONG", new { field = "preparedBy", max = Report.PreparedByMaxLength }));
         }
+        // Firma kütüğe yazılmaz ama belgeye girer: sınır profil ucundakiyle
+        // AYNI kaynaktan okunur, yoksa profile sığmayan bir ad rapor yoluyla
+        // belgeye kaçardı.
+        if (req.Company is not null && req.Company.Trim().Length > ApplicationUser.CompanyMaxLength)
+        {
+            return Results.BadRequest(
+                new ApiError("TOO_LONG", new { field = "company", max = ApplicationUser.CompanyMaxLength }));
+        }
 
         // Var olmayan ve başkasına ait proje AYNI 404'ü verir.
         var projectName = await OwnedProjectName(db, id, userId);
         if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
 
-        var (payload, tooLarge) = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date, req.Labels, req.Lang ?? "tr");
+        var (payload, tooLarge) = await ProjectPayload(
+            db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Company?.Trim(),
+            req.Date, req.Labels, req.Lang ?? "tr");
         if (tooLarge) return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
         if (payload is null)
         {
@@ -294,8 +304,12 @@ public static class ReportEndpoints
             return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-project" }));
         }
 
+        // Firma `null` geçilir, yani PROFİLDEKİ değer okunur. Kütükte firma
+        // saklanmıyor (Report yalnız başlık ve hazırlayanı taşır), dolayısıyla
+        // o günkü tek seferlik düzenleme geri getirilemez — uydurmak yerine
+        // bugünkü profil yazılır. Geçmişten indirme zaten yeniden ÜRETİMDİR.
         var (payload, tooLarge) = await ProjectPayload(
-            db, report.ProjectId.Value, userId, report.Title, report.PreparedBy,
+            db, report.ProjectId.Value, userId, report.Title, report.PreparedBy, null,
             report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture), req.Labels, req.Lang ?? "tr");
 
         if (tooLarge) return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
@@ -332,9 +346,13 @@ public static class ReportEndpoints
     // rapor düğmesi (GenerateProjectReport). İkisi ayrı ayrı yazılsaydı,
     // bölümlerin sırası ya da bozuk kaydın atlanması gibi kurallar zamanla
     // ayrışır ve aynı proje iki yoldan farklı belge verirdi.
-    private static async Task<(ReportPayload? Payload, bool TooLarge)> ProjectPayload(
-        AppDbContext db, Guid projectId, string userId, string title, string preparedBy, string date,
-        ReportLabels labels, string lang)
+    // `company`: `null` ise profildeki firma okunur, verilmişse (boş dize dahil)
+    // olduğu gibi kullanılır — üç durumun anlamı ProjectReportRequest'te yazılı.
+    // `internal`: künye kuralları (özellikle firmanın üç durumu) doğrudan
+    // sınanıyor — bkz. Alp.Api.Tests/ProjectReportCompanyTests.cs.
+    internal static async Task<(ReportPayload? Payload, bool TooLarge)> ProjectPayload(
+        AppDbContext db, Guid projectId, string userId, string title, string preparedBy,
+        string? company, string date, ReportLabels labels, string lang)
     {
         // Bütçe kontrolü satırlar belleğe okunmadan, tek skaler sorguyla
         // yapılır — aşan projede bölümlerin kendisi hiç taşınmaz.
@@ -363,12 +381,18 @@ public static class ReportEndpoints
 
         if (sections.Count == 0) return (null, false);
 
-        var company = await db.Users
+        // Profil YALNIZCA alan hiç gelmediğinde okunur. Sorgu da o zaman
+        // çalışır: künyeyi zaten taşıyan istekte gereksiz bir tur atmaz.
+        var effectiveCompany = company ?? await db.Users
             .Where(u => u.Id == userId)
             .Select(u => u.Company)
             .FirstOrDefaultAsync();
 
-        return (new ReportPayload(schemaVersion, title, preparedBy, company, date, labels, lang, sections), false);
+        // Boş dize belgeye "firma" satırı olarak girmesin: dizgici `null`
+        // bekliyor, boş dize başlıkta boş bir satır bırakırdı.
+        if (string.IsNullOrWhiteSpace(effectiveCompany)) effectiveCompany = null;
+
+        return (new ReportPayload(schemaVersion, title, preparedBy, effectiveCompany, date, labels, lang, sections), false);
     }
 
 
@@ -396,6 +420,13 @@ public static class ReportEndpoints
         if (payload.PreparedBy.Length > Report.PreparedByMaxLength)
         {
             return new ApiError("TOO_LONG", new { field = "preparedBy", max = Report.PreparedByMaxLength });
+        }
+        // Firma kütük kolonu değil, ama artık kullanıcının DÜZENLEDİĞİ bir alan
+        // (eskiden yalnız profilden geliyordu ve orada sınırlanmıştı). Sınır
+        // aynı kaynaktan okunur ki iki yol aynı şeyi kabul etsin.
+        if (payload.Company is not null && payload.Company.Length > ApplicationUser.CompanyMaxLength)
+        {
+            return new ApiError("TOO_LONG", new { field = "company", max = ApplicationUser.CompanyMaxLength });
         }
         return null;
     }

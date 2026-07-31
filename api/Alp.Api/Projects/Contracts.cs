@@ -91,7 +91,16 @@ public record ProjectDetailResponse(
 // `web/src/data/reportText.js` → `reportLabels(lang)`.
 // `Lang`: METİN DEĞİL, ANAHTAR. Kayıt bölümü her dilde taşıyor; sunucu hangi
 // dalı okuyacağını buradan öğrenir. Kullanıcı metni yine sunucuya girmez.
-public record ProjectReportRequest(string Title, string PreparedBy, string Date, ReportLabels Labels, string? Lang);
+// `Company`: belgenin künyesindeki firma adı. ÜÇ DURUM ayrı anlam taşır ve
+// karıştırılmamalı:
+//   - alan hiç gönderilmemiş (`null`) → kullanıcının PROFİLİNDEKİ firma yazılır
+//     (eski istemciler ve profilin varsayılan davranışı);
+//   - boş dize → o belgede firma YAZILMAZ (kullanıcı alanı bilerek boşalttı);
+//   - dolu → tek seferlik olarak o değer yazılır, profil DEĞİŞMEZ.
+// Boşaltmayı `null` saysaydık firmayı kaldırmak isteyen kullanıcı sessizce
+// profildekini alırdı.
+public record ProjectReportRequest(
+    string Title, string PreparedBy, string? Company, string Date, ReportLabels Labels, string? Lang);
 
 public record CreateCalculationRequest(
     string ToolKey,

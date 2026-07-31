@@ -446,9 +446,9 @@ public static class AuthEndpoints
         if (req.Company is not null)
         {
             var company = req.Company.Trim();
-            if (company.Length > CompanyMax)
+            if (company.Length > ApplicationUser.CompanyMaxLength)
             {
-                return Results.BadRequest(new ApiError("TOO_LONG", new { field = "company", max = CompanyMax }));
+                return Results.BadRequest(new ApiError("TOO_LONG", new { field = "company", max = ApplicationUser.CompanyMaxLength }));
             }
             // Boş dize "alanı temizle" demektir; `null` ise alan hiç gönderilmemiş
             // sayılır ve yukarıdaki `is not null` koşulu zaten devreye girmez.
@@ -518,7 +518,6 @@ public static class AuthEndpoints
     }
 
     private const int DisplayNameMax = 80;
-    private const int CompanyMax = 120;
 
     private static async Task<ApplicationUser?> CurrentUser(UserManager<ApplicationUser> userManager, HttpContext http)
     {

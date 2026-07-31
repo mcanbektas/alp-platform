@@ -4,6 +4,12 @@ namespace Alp.Domain;
 
 public class ApplicationUser : IdentityUser
 {
+    // Uzunluk sınırı burada durur, uç noktalarda değil: iki ayrı uç doğruluyor
+    // (profil güncelleme ve proje raporu künyesi) ve ayrı ayrı yazılsalardı
+    // biri değişince öteki sessizce geride kalırdı. Report/Project'teki desenin
+    // aynısı.
+    public const int CompanyMaxLength = 120;
+
     public string DisplayName { get; set; } = string.Empty;
     public string? Company { get; set; }
 
