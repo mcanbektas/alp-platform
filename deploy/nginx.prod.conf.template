@@ -142,8 +142,10 @@ server {
         try_files $uri =404;
     }
 
-    location = /index.html {
-        add_header Cache-Control "no-store, must-revalidate" always;
+    # Yazı tipleri: dosya adı içeriğiyle sabittir, aşağıdaki no-store bunlara
+    # uygulanmamalı. Gerekçe nginx.conf'taki nottadır.
+    location /fonts/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-Frame-Options "DENY" always;
@@ -153,8 +155,21 @@ server {
         try_files $uri =404;
     }
 
-    # SPA geri düşüşü — BrowserRouter derin bağlantısı bu satır olmadan 404 alır.
+    # HTML kabukları + SPA geri düşüşü. `no-store` burada durur: prerender'dan
+    # sonra kabuk tek dosya değil (38 sayfa + spa-fallback) ve `try_files` iç
+    # yönlendirmesi location'ı yeniden seçmediği için ayrı bir dosya-adı bloğu
+    # geri düşüşle gelen istekleri hiç yakalamıyordu. `$uri.html` prerender
+    # çıktısını 301 yönlendirmesi olmadan servis eder. Uzun gerekçe:
+    # nginx.conf'taki not, docs/prerender-karari.md §6.
     location / {
-        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-store, must-revalidate" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+        # `$uri/index.html` kök isteği (`/`) için şart — gerekçe nginx.conf'ta.
+        try_files $uri $uri.html $uri/index.html /spa-fallback.html /index.html;
     }
 }
