@@ -155,6 +155,20 @@ server {
         try_files $uri =404;
     }
 
+    # Web app manifest'i — ayrı blokta olmasının tek nedeni içerik tipi
+    # (`.webmanifest` mime.types'ta yok). Gerekçe nginx.conf'ta.
+    location = /manifest.webmanifest {
+        default_type application/manifest+json;
+        add_header Cache-Control "no-store, must-revalidate" always;
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
+        try_files $uri =404;
+    }
+
     # HTML kabukları + SPA geri düşüşü. `no-store` burada durur: prerender'dan
     # sonra kabuk tek dosya değil (38 sayfa + spa-fallback) ve `try_files` iç
     # yönlendirmesi location'ı yeniden seçmediği için ayrı bir dosya-adı bloğu
