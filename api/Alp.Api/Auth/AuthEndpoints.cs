@@ -61,7 +61,7 @@ public static class AuthEndpoints
         return string.IsNullOrWhiteSpace(url) ? "http://localhost:3000" : url;
     }
 
-    private static async Task<IResult> Register(
+    internal static async Task<IResult> Register(
         RegisterRequest req,
         UserManager<ApplicationUser> userManager,
         IEmailSender emailSender,
@@ -72,6 +72,8 @@ public static class AuthEndpoints
         {
             return Results.BadRequest(new ApiError("MISSING_FIELDS"));
         }
+
+        var lang = AuthEmailText.Normalize(req.Lang);
 
         var user = new ApplicationUser
         {
@@ -95,10 +97,14 @@ public static class AuthEndpoints
                 var existing = await userManager.FindByEmailAsync(req.Email);
                 if (existing is not null)
                 {
-                    await emailSender.SendAsync(existing.Email!, "Kayıt denemesi",
-                        "Bu e-posta adresiyle ALP PCB Toolkit üzerinde yeni bir hesap açılmaya "
-                        + "çalışıldı. Zaten bir hesabın var — bu sen değilsen görmezden gelebilirsin. "
-                        + "Parolanı unuttuysan parola sıfırlama sayfasını kullan.");
+                    // Bu postanın alıcısı hesabın GERÇEK sahibi, isteği yapan
+                    // ise bir yabancı olabilir: dil burada bir tahmindir.
+                    // Kabul edildi, çünkü içerik zararsız (token taşımaz) ve
+                    // daha iyisi kalıcı hesap dili olurdu — o da elendi
+                    // (docs/eposta-dili-karari.md §1, §7).
+                    await emailSender.SendAsync(existing.Email!,
+                        AuthEmailText.DuplicateRegistrationSubject(lang),
+                        AuthEmailText.DuplicateRegistrationBody(lang));
                 }
                 return Results.Created();
             }
@@ -106,7 +112,7 @@ public static class AuthEndpoints
             return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes }));
         }
 
-        await SendConfirmationMail(user, userManager, emailSender, config);
+        await SendConfirmationMail(user, userManager, emailSender, config, lang);
 
         return Results.Created();
     }
@@ -117,13 +123,15 @@ public static class AuthEndpoints
         ApplicationUser user,
         UserManager<ApplicationUser> userManager,
         IEmailSender emailSender,
-        IConfiguration config)
+        IConfiguration config,
+        string lang)
     {
         var token = await userManager.GenerateEmailConfirmationTokenAsync(user);
-        var link = $"{FrontendBaseUrl(config)}/e-posta-dogrula"
+        var link = $"{FrontendBaseUrl(config)}{AuthEmailText.ConfirmEmailPath(lang)}"
             + $"?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";
-        await emailSender.SendAsync(user.Email!, "E-posta adresini doğrula",
-            $"Hesabını doğrulamak için: <a href=\"{link}\">{link}</a>");
+        await emailSender.SendAsync(user.Email!,
+            AuthEmailText.ConfirmEmailSubject(lang),
+            AuthEmailText.ConfirmEmailBody(lang, link));
     }
 
     // Doğrulama postası kaybolduğunda tek kurtarma yolu. ForgotPassword ile
@@ -142,7 +150,8 @@ public static class AuthEndpoints
         var user = await userManager.FindByEmailAsync(req.Email);
         if (user is not null && !await userManager.IsEmailConfirmedAsync(user))
         {
-            await SendConfirmationMail(user, userManager, emailSender, config);
+            await SendConfirmationMail(user, userManager, emailSender, config,
+                AuthEmailText.Normalize(req.Lang));
         }
 
         return Results.Ok();
@@ -340,7 +349,7 @@ public static class AuthEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> ForgotPassword(
+    internal static async Task<IResult> ForgotPassword(
         ForgotPasswordRequest req,
         UserManager<ApplicationUser> userManager,
         IEmailSender emailSender,
@@ -351,11 +360,13 @@ public static class AuthEndpoints
         var user = await userManager.FindByEmailAsync(req.Email);
         if (user is not null && await userManager.IsEmailConfirmedAsync(user))
         {
+            var lang = AuthEmailText.Normalize(req.Lang);
             var token = await userManager.GeneratePasswordResetTokenAsync(user);
-            var link = $"{FrontendBaseUrl(config)}/parola-sifirla"
+            var link = $"{FrontendBaseUrl(config)}{AuthEmailText.ResetPasswordPath(lang)}"
                 + $"?email={Uri.EscapeDataString(req.Email)}&token={Uri.EscapeDataString(token)}";
-            await emailSender.SendAsync(req.Email, "Parola sıfırlama",
-                $"Parolanı sıfırlamak için: <a href=\"{link}\">{link}</a>");
+            await emailSender.SendAsync(req.Email,
+                AuthEmailText.ResetPasswordSubject(lang),
+                AuthEmailText.ResetPasswordBody(lang, link));
         }
 
         return Results.Ok();

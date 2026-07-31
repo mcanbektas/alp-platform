@@ -1,14 +1,19 @@
 namespace Alp.Api.Auth;
 
-public record RegisterRequest(string Email, string Password, string DisplayName);
+// `Lang` isteğe bağlıdır ve verilmezse Türkçedir: postanın dili, postayı
+// tetikleyen isteğin — yani kullanıcının o an gördüğü arayüzün — dilidir.
+// Alan gövdede taşınır; gerekçe ve elenen seçenekler (Accept-Language, kalıcı
+// hesap dili) docs/eposta-dili-karari.md §1. İstemci yalnızca DİL KODU
+// gönderir, metni değil (§2).
+public record RegisterRequest(string Email, string Password, string DisplayName, string? Lang = null);
 // RememberMe isteğe bağlıdır ve varsayılanı false: alan gönderilmezse oturum
 // tarayıcı kapanınca biter. Eski istemci gövdesi bu yüzden kırılmaz.
 public record LoginRequest(string Email, string Password, bool RememberMe = false);
-public record ForgotPasswordRequest(string Email);
+public record ForgotPasswordRequest(string Email, string? Lang = null);
 // Doğrulama postası kaybolduğunda kendi kendine kurtarma. Bu uç olmadan
 // akış çıkmaz sokaktı: RequireConfirmedEmail açıkken giriş yapılamıyor,
 // ForgotPassword da doğrulanmış e-posta şartı koşuyor.
-public record ResendConfirmationRequest(string Email);
+public record ResendConfirmationRequest(string Email, string? Lang = null);
 // Oturum açmış kullanıcının kendi parolasını değiştirmesi. Mevcut parola
 // ZORUNLUDUR: erişim token'ı ele geçirilmiş bir oturum, parolayı da
 // değiştirip hesabı büsbütün devralamasın diye.
