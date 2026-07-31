@@ -38,15 +38,18 @@ docker compose exec -T postgres \
   pg_dump --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --clean --if-exists \
   | gzip -9 > "$OUT.part"
 
-mv "$OUT.part" "$OUT"
-
-# Boş/bozuk çıktıyı sessizce saklama.
-if [[ ! -s "$OUT" ]]; then
-  echo "HATA: yedek boş — $OUT" >&2
+# DOĞRULA, SONRA ADLANDIR. Eskiden mv önce geliyordu: kesik bir dump geçerli
+# görünen adı önce alıyor, ancak ONDAN SONRA hata veriyordu — .part
+# aşamalandırmasının bütün amacı boşa gidiyordu. Kontrolden geçmeyen dosya
+# hiçbir zaman alp-*.sql.gz adını almaz.
+if [[ ! -s "$OUT.part" ]]; then
+  rm -f "$OUT.part"
+  echo "HATA: yedek boş — $OUT.part silindi" >&2
   exit 1
 fi
-gzip -t "$OUT"
+gzip -t "$OUT.part"
 
+mv "$OUT.part" "$OUT"
 echo "Yedek alındı: $OUT ($(du -h "$OUT" | cut -f1))"
 
 # ---- Sunucu dışına kopya ----
@@ -54,6 +57,18 @@ if [[ -n "$REMOTE_TARGET" ]]; then
   # Örn. BACKUP_REMOTE_TARGET="yedek@baska-sunucu:/yedekler/alp/"
   scp -q "$OUT" "$REMOTE_TARGET"
   echo "Uzağa kopyalandı: $REMOTE_TARGET"
+
+  # Uzak taraf da budanır — yalnızca yerel budamak uzak diski sonsuz
+  # büyütüyordu. Hedef "kullanıcı@sunucu:/yol/" biçiminde; iki nokta yoksa
+  # yerel bir dizindir ve aynı find yeter.
+  REMOTE_HOST="${REMOTE_TARGET%%:*}"
+  REMOTE_PATH="${REMOTE_TARGET#*:}"
+  if [[ "$REMOTE_HOST" != "$REMOTE_TARGET" ]]; then
+    ssh "$REMOTE_HOST" "find '$REMOTE_PATH' -name 'alp-*.sql.gz' -type f -mtime +$KEEP_DAYS -delete"
+  else
+    find "$REMOTE_TARGET" -name 'alp-*.sql.gz' -type f -mtime "+$KEEP_DAYS" -delete
+  fi
+  echo "Uzak yedeklerde $KEEP_DAYS günden eskiler silindi."
 else
   echo "UYARI: BACKUP_REMOTE_TARGET boş — yedek yalnızca bu sunucuda duruyor." >&2
 fi

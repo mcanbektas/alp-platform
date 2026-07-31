@@ -11,10 +11,25 @@
 
 name: alp-pcb-toolkit
 
+# Docker'ın varsayılan json-file sürücüsü SINIRSIZDIR: log dosyası konteyner
+# yaşadıkça büyür ve küçük bir diskte en olası ilk kesinti buydu. Her servis
+# aynı sınırı alır — kayıt kaybolmaz, disk dolmaz.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
+    # Kaynak sınırları: kaçak bir sorgu ya da bellek baskısı bütün sunucuyu
+    # (OOM killer) götürmesin — konteyner kendi sınırında ölür ve restart
+    # politikasıyla geri gelir.
+    mem_limit: 512m
+    cpus: 1
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -37,6 +52,12 @@ services:
       context: ..
       dockerfile: api/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
+    # PDF dizgisi (QuestPDF/Skia) bellek yoğun — sınır bilinçli olarak en
+    # geniş burada. Ölçülen tek istekle 7 GB'a tırmanma vakası artık boyut
+    # kapısıyla kesiliyor; bu sınır o kapının arkasındaki son emniyettir.
+    mem_limit: 1g
+    cpus: 2
     depends_on:
       postgres:
         condition: service_healthy
@@ -81,6 +102,10 @@ services:
       context: ..
       dockerfile: web/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
+    # Statik dosya + ters vekil — nginx'e bu kadarı bol bile.
+    mem_limit: 128m
+    cpus: 0.5
     depends_on:
       api:
         condition: service_healthy
