@@ -6,6 +6,11 @@ namespace Alp.Domain;
 // docs/uyelik-ve-rapor-plani.md §4.2
 public class Calculation
 {
+    // Bkz. Project'teki not: şema ve uç doğrulaması tek kaynaktan okur.
+    public const int ToolKeyMaxLength = 100;
+    public const int ToolModeMaxLength = 100;
+    public const int EngineVersionMaxLength = 50;
+
     public Guid Id { get; set; }
     public Guid ProjectId { get; set; }
     public Project? Project { get; set; }

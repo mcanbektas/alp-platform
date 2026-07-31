@@ -70,6 +70,16 @@ public static class ReportEndpoints
     // Gövdede yalnız başlık, hazırlayan ve tarih var — 8 KB fazlasıyla yeter.
     private const long ProjectReportBodyLimitBytes = 8 * 1024;
 
+    // Proje raporunun kaynak bütçesi. Gövde sınırı burada işe yaramaz: yük
+    // istemciden değil veritabanından kurulur ve hesap başına 2 MB'a dek
+    // ReportJson birikebilir. Sınırsız bırakılırsa büyük bir proje, belge
+    // dizgisi başlamadan bütün bölümleri belleğe çeker — PDF ancak bellek
+    // harcandıktan sonra ReportLayoutException'la 422'ye düşüyordu, XLSX hiç
+    // düşmüyordu (500). Bütçe aşılırsa hiçbir satır BELLEĞE OKUNMADAN
+    // REPORT_TOO_LARGE döner; tek araçlık rapor uçlarının 5 MB gövde sınırıyla
+    // aynı mertebede, çok bölümlü olduğu için biraz üstünde.
+    private const long ProjectReportSourceBudgetChars = 8 * 1024 * 1024;
+
     private static async Task<IResult> GenerateProjectPdf(
         Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, PdfReportBuilder builder)
     {
@@ -93,12 +103,21 @@ public static class ReportEndpoints
         if (string.IsNullOrWhiteSpace(req.Title)) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "title" }));
         if (string.IsNullOrWhiteSpace(req.PreparedBy)) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "preparedBy" }));
         if (string.IsNullOrWhiteSpace(req.Date)) return Results.BadRequest(new ApiError("MISSING_FIELDS", new { field = "date" }));
+        if (req.Title.Trim().Length > Report.TitleMaxLength)
+        {
+            return Results.BadRequest(new ApiError("TOO_LONG", new { field = "title", max = Report.TitleMaxLength }));
+        }
+        if (req.PreparedBy.Trim().Length > Report.PreparedByMaxLength)
+        {
+            return Results.BadRequest(new ApiError("TOO_LONG", new { field = "preparedBy", max = Report.PreparedByMaxLength }));
+        }
 
         // Var olmayan ve başkasına ait proje AYNI 404'ü verir.
         var projectName = await OwnedProjectName(db, id, userId);
         if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
 
-        var payload = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date, req.Labels, req.Lang ?? "tr");
+        var (payload, tooLarge) = await ProjectPayload(db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Date, req.Labels, req.Lang ?? "tr");
+        if (tooLarge) return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
         if (payload is null)
         {
             // Projede hiç kayıtlı rapor bölümü yok — indirmenin üretecek verisi
@@ -185,7 +204,18 @@ public static class ReportEndpoints
             if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
         }
 
-        var bytes = builder.Build(payload);
+        byte[] bytes;
+        try
+        {
+            bytes = builder.Build(payload);
+        }
+        catch (ReportLayoutException)
+        {
+            // PDF dalıyla simetri. ClosedXML bugün bu istisnayı üretmiyor ama
+            // XlsxReportBuilder ileride kendi sınırını koyarsa buradaki yanıt
+            // sözleşmesi hazır olsun — 500 değil 422.
+            return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
+        }
         var record = await LogReport(db, userId, payload, ReportFormat.Xlsx, bytes, projectId);
 
         return Results.File(bytes, XlsxContentType, DownloadName(payload, projectName, record, "xlsx"));
@@ -267,10 +297,11 @@ public static class ReportEndpoints
             return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-project" }));
         }
 
-        var payload = await ProjectPayload(
+        var (payload, tooLarge) = await ProjectPayload(
             db, report.ProjectId.Value, userId, report.Title, report.PreparedBy,
             report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture), req.Labels, req.Lang ?? "tr");
 
+        if (tooLarge) return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
         if (payload is null)
         {
             return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-sections" }));
@@ -304,10 +335,17 @@ public static class ReportEndpoints
     // rapor düğmesi (GenerateProjectReport). İkisi ayrı ayrı yazılsaydı,
     // bölümlerin sırası ya da bozuk kaydın atlanması gibi kurallar zamanla
     // ayrışır ve aynı proje iki yoldan farklı belge verirdi.
-    private static async Task<ReportPayload?> ProjectPayload(
+    private static async Task<(ReportPayload? Payload, bool TooLarge)> ProjectPayload(
         AppDbContext db, Guid projectId, string userId, string title, string preparedBy, string date,
         ReportLabels labels, string lang)
     {
+        // Bütçe kontrolü satırlar belleğe okunmadan, tek skaler sorguyla
+        // yapılır — aşan projede bölümlerin kendisi hiç taşınmaz.
+        var totalChars = await db.Calculations
+            .Where(c => c.ProjectId == projectId && c.ReportJson != null)
+            .SumAsync(c => (long)c.ReportJson!.Length);
+        if (totalChars > ProjectReportSourceBudgetChars) return (null, true);
+
         var stored = await db.Calculations
             .Where(c => c.ProjectId == projectId && c.ReportJson != null)
             .OrderBy(c => c.SortOrder)
@@ -326,14 +364,14 @@ public static class ReportEndpoints
             if (schemaVersion == 0) schemaVersion = row.SchemaVersion;
         }
 
-        if (sections.Count == 0) return null;
+        if (sections.Count == 0) return (null, false);
 
         var company = await db.Users
             .Where(u => u.Id == userId)
             .Select(u => u.Company)
             .FirstOrDefaultAsync();
 
-        return new ReportPayload(schemaVersion, title, preparedBy, company, date, labels, lang, sections);
+        return (new ReportPayload(schemaVersion, title, preparedBy, company, date, labels, lang, sections), false);
     }
 
 
@@ -352,6 +390,16 @@ public static class ReportEndpoints
         if (payload.Sections.Count == 0) return new ApiError("EMPTY_PAYLOAD");
         if (string.IsNullOrWhiteSpace(payload.Title)) return new ApiError("MISSING_FIELDS", new { field = "title" });
         if (string.IsNullOrWhiteSpace(payload.PreparedBy)) return new ApiError("MISSING_FIELDS", new { field = "preparedBy" });
+        // Kütük kolonlarının şema sınırı (HasMaxLength) — aşan değer belge
+        // üretildikten SONRA LogReport'ta DB hatasıyla 500 verirdi.
+        if (payload.Title.Length > Report.TitleMaxLength)
+        {
+            return new ApiError("TOO_LONG", new { field = "title", max = Report.TitleMaxLength });
+        }
+        if (payload.PreparedBy.Length > Report.PreparedByMaxLength)
+        {
+            return new ApiError("TOO_LONG", new { field = "preparedBy", max = Report.PreparedByMaxLength });
+        }
         return null;
     }
 

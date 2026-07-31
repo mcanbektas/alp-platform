@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Alp.Api.Common;
 using Alp.Api.Http;
 using Alp.Data;
@@ -17,18 +18,34 @@ public static class ProjectEndpoints
     // düz form verisinden büyük bir üst sınır — bkz. görev tanımı.
     private const long CalculationBodyLimitBytes = 2 * 1024 * 1024;
 
+    // Alan uzunlukları — kaynak Alp.Domain'deki sabitler; şemadaki HasMaxLength
+    // aynı sabitleri okur (AppDbContext). Gövde sınırı tek başına yetmez:
+    // 16 KB'lık gövdeye 15 KB'lık tek bir ad sığar ve o ad listede, raporda,
+    // dosya adında dolaşır. Aşan istek DB'ye düşmeden TOO_LONG döner; şema
+    // sınırı yalnızca son savunmadır.
+    private const int ProjectNameMax = Project.NameMaxLength;
+    private const int ProjectDescriptionMax = Project.DescriptionMaxLength;
+    private const int ToolKeyMax = Calculation.ToolKeyMaxLength;
+    private const int ToolModeMax = Calculation.ToolModeMaxLength;
+    private const int EngineVersionMax = Calculation.EngineVersionMaxLength;
+
     public static void MapProjectEndpoints(this IEndpointRouteBuilder app)
     {
         var projects = app.MapGroup("/api/projects").RequireAuthorization();
 
+        // Bütün yazma uçları "writes" kovasına girer (kullanıcı başına, bkz.
+        // Program.cs). Politika baştan beri vardı ama yalnızca PATCH /api/me'ye
+        // bağlıydı — 2 MB'lık hesap POST'u dahil buradaki uçlar sınırsızdı.
         projects.MapGet("/", ListProjects);
-        projects.MapPost("/", CreateProject).LimitBodySize(ProjectBodyLimitBytes);
+        projects.MapPost("/", CreateProject).RequireRateLimiting("writes").LimitBodySize(ProjectBodyLimitBytes);
         projects.MapGet("/{id:guid}", GetProject);
-        projects.MapPatch("/{id:guid}", UpdateProject).LimitBodySize(ProjectBodyLimitBytes);
-        projects.MapDelete("/{id:guid}", DeleteProject);
+        projects.MapPatch("/{id:guid}", UpdateProject).RequireRateLimiting("writes").LimitBodySize(ProjectBodyLimitBytes);
+        projects.MapDelete("/{id:guid}", DeleteProject).RequireRateLimiting("writes");
 
-        projects.MapPost("/{id:guid}/calculations", CreateCalculation).LimitBodySize(CalculationBodyLimitBytes);
-        projects.MapPost("/{id:guid}/calculations/reorder", ReorderCalculations).LimitBodySize(ProjectBodyLimitBytes);
+        projects.MapPost("/{id:guid}/calculations", CreateCalculation)
+            .RequireRateLimiting("writes").LimitBodySize(CalculationBodyLimitBytes);
+        projects.MapPost("/{id:guid}/calculations/reorder", ReorderCalculations)
+            .RequireRateLimiting("writes").LimitBodySize(ProjectBodyLimitBytes);
 
         // Tekil hesap uçları /api/projects/{id} altında değil, kendi kökünde
         // yaşar — hesap güncelleme/silme üst projeyi URL'de tekrar etmeden
@@ -37,8 +54,9 @@ public static class ProjectEndpoints
         var calculations = app.MapGroup("/api/calculations").RequireAuthorization();
 
         calculations.MapGet("/{id:guid}", GetCalculation);
-        calculations.MapPatch("/{id:guid}", UpdateCalculation).LimitBodySize(CalculationBodyLimitBytes);
-        calculations.MapDelete("/{id:guid}", DeleteCalculation);
+        calculations.MapPatch("/{id:guid}", UpdateCalculation)
+            .RequireRateLimiting("writes").LimitBodySize(CalculationBodyLimitBytes);
+        calculations.MapDelete("/{id:guid}", DeleteCalculation).RequireRateLimiting("writes");
     }
 
     private static async Task<IResult> ListProjects(AppDbContext db, HttpContext http)
@@ -61,6 +79,11 @@ public static class ProjectEndpoints
         if (error is not null) return error;
 
         if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new ApiError("MISSING_FIELDS"));
+        if (TooLong(req.Name.Trim(), ProjectNameMax, "name", out var tooLong)
+            || TooLong(req.Description, ProjectDescriptionMax, "description", out tooLong))
+        {
+            return tooLong!;
+        }
 
         var now = DateTimeOffset.UtcNow;
         var project = new Project
@@ -130,12 +153,14 @@ public static class ProjectEndpoints
         if (req.Name is not null)
         {
             if (string.IsNullOrWhiteSpace(req.Name)) return Results.BadRequest(new ApiError("MISSING_FIELDS"));
+            if (TooLong(req.Name.Trim(), ProjectNameMax, "name", out var nameTooLong)) return nameTooLong!;
             project.Name = req.Name.Trim();
             changed = true;
         }
 
         if (req.Description is not null)
         {
+            if (TooLong(req.Description, ProjectDescriptionMax, "description", out var descTooLong)) return descTooLong!;
             // Boş dize açıkça gönderilmişse alan temizlenir (null'a döner);
             // atlanmış/null gönderilmiş olsaydı bu bloğa hiç girilmezdi.
             project.Description = req.Description.Length == 0 ? null : req.Description;
@@ -175,6 +200,25 @@ public static class ProjectEndpoints
             || req.SchemaVersion < 1)
         {
             return Results.BadRequest(new ApiError("MISSING_FIELDS"));
+        }
+
+        if (TooLong(req.ToolKey, ToolKeyMax, "toolKey", out var tooLong)
+            || TooLong(req.ToolMode, ToolModeMax, "toolMode", out tooLong)
+            || TooLong(req.EngineVersion, EngineVersionMax, "engineVersion", out tooLong))
+        {
+            return tooLong!;
+        }
+
+        // JSON alanları yazılırken ayrıştırılmaz ama en azından GEÇERLİ JSON
+        // olduğu doğrulanır. Bozuk içerik eskiden sessizce kabul ediliyor,
+        // aylar sonra StoredSection.Read'te null'a düşüp o satırı her rapordan
+        // kalıcı ve sessiz şekilde düşürüyordu — kullanıcıya hiçbir işaret
+        // gitmeden. Hata anında ve yazana dönmeli.
+        if (BadJson(req.InputsJson, "inputsJson", out var badJson)
+            || BadJson(req.ResultJson, "resultJson", out badJson)
+            || BadJson(req.ReportJson, "reportJson", out badJson))
+        {
+            return badJson!;
         }
 
         var maxSortOrder = await db.Calculations
@@ -235,6 +279,21 @@ public static class ProjectEndpoints
             || (req.SchemaVersion is not null && req.SchemaVersion < 1))
         {
             return Results.BadRequest(new ApiError("MISSING_FIELDS"));
+        }
+
+        // CreateCalculation ile aynı uzunluk ve JSON sözleşmesi — PATCH bu
+        // kapıların yan yolu olamaz.
+        if (TooLong(req.ToolMode, ToolModeMax, "toolMode", out var tooLong)
+            || TooLong(req.EngineVersion, EngineVersionMax, "engineVersion", out tooLong))
+        {
+            return tooLong!;
+        }
+
+        if (BadJson(req.InputsJson, "inputsJson", out var badJson)
+            || BadJson(req.ResultJson, "resultJson", out badJson)
+            || BadJson(req.ReportJson, "reportJson", out badJson))
+        {
+            return badJson!;
         }
 
         var changed = false;
@@ -311,6 +370,40 @@ public static class ProjectEndpoints
         await db.SaveChangesAsync();
 
         return Results.Ok(new OkResponse(true));
+    }
+
+    // ---- Girdi doğrulama yardımcıları ----
+
+    // `value` null ise alan gönderilmemiştir ve sınır uygulanmaz (PATCH
+    // sözleşmesi). Hata gövdesi UpdateMe'deki TOO_LONG şekliyle birebir aynı.
+    private static bool TooLong(string? value, int max, string field, out IResult? error)
+    {
+        if (value is not null && value.Length > max)
+        {
+            error = Results.BadRequest(new ApiError("TOO_LONG", new { field, max }));
+            return true;
+        }
+        error = null;
+        return false;
+    }
+
+    // Yalnızca sözdizimi doğrulanır, şema değil — içerik istemcinin motoruna
+    // aittir ve sunucu onu yorumlamaz. `JsonDocument.Parse` DOM'u kurar ve
+    // atar; 2 MB'lık gövdede maliyeti yazma isteğinin kendisinden küçüktür.
+    private static bool BadJson(string? value, string field, out IResult? error)
+    {
+        error = null;
+        if (value is null) return false;
+        try
+        {
+            using var _ = JsonDocument.Parse(value);
+            return false;
+        }
+        catch (JsonException)
+        {
+            error = Results.BadRequest(new ApiError("INVALID_JSON", new { field }));
+            return true;
+        }
     }
 
     private static CalculationDto ToDto(Calculation c) => new(

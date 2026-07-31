@@ -8,6 +8,10 @@ public enum ReportFormat
 
 public class Report
 {
+    // Bkz. Project'teki not: şema ve uç doğrulaması tek kaynaktan okur.
+    public const int TitleMaxLength = 200;
+    public const int PreparedByMaxLength = 200;
+
     public Guid Id { get; set; }
 
     // Rapor bir projeye kaydedilmeden de üretilebilir — "rapor al" ve

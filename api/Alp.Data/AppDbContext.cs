@@ -26,6 +26,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
         builder.Entity<RefreshToken>(e =>
         {
+            // SHA-256 hex 64 karakterdir; IP en uzun IPv6 gösterimiyle 45.
+            // Bu kolonlara kullanıcı verisi girmez ama sınırsız `text` da
+            // olmamalı — sınır, şemanın kendini belgelemesidir.
+            e.Property(t => t.TokenHash).HasMaxLength(64);
+            e.Property(t => t.ReplacedByHash).HasMaxLength(64);
+            e.Property(t => t.CreatedByIp).HasMaxLength(45);
             e.HasIndex(t => t.TokenHash).IsUnique();
             e.HasIndex(t => t.UserId);
             e.HasOne(t => t.User).WithMany().HasForeignKey(t => t.UserId).OnDelete(DeleteBehavior.Cascade);
@@ -33,12 +39,20 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
         builder.Entity<Project>(e =>
         {
+            // Sınırlar uç doğrulamasıyla aynı sabitlerden gelir (Alp.Domain).
+            // Uç TOO_LONG ile erken döner; buradaki sınır, doğrulamayı atlayan
+            // bir yol kalırsa son savunmadır.
+            e.Property(p => p.Name).HasMaxLength(Project.NameMaxLength);
+            e.Property(p => p.Description).HasMaxLength(Project.DescriptionMaxLength);
             e.HasIndex(p => p.UserId);
             e.HasOne(p => p.User).WithMany().HasForeignKey(p => p.UserId).OnDelete(DeleteBehavior.Cascade);
         });
 
         builder.Entity<Calculation>(e =>
         {
+            e.Property(c => c.ToolKey).HasMaxLength(Calculation.ToolKeyMaxLength);
+            e.Property(c => c.ToolMode).HasMaxLength(Calculation.ToolModeMaxLength);
+            e.Property(c => c.EngineVersion).HasMaxLength(Calculation.EngineVersionMaxLength);
             e.HasIndex(c => c.ProjectId);
             e.HasOne(c => c.Project).WithMany(p => p.Calculations)
                 .HasForeignKey(c => c.ProjectId).OnDelete(DeleteBehavior.Cascade);
@@ -46,6 +60,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
 
         builder.Entity<Report>(e =>
         {
+            e.Property(r => r.Title).HasMaxLength(Report.TitleMaxLength);
+            e.Property(r => r.PreparedBy).HasMaxLength(Report.PreparedByMaxLength);
             e.HasIndex(r => r.ProjectId);
             e.HasIndex(r => r.UserId);
             // Proje silinirse rapor kaydı silinmez, yalnızca bağı kopar: kütük
