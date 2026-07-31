@@ -214,7 +214,9 @@ Yeni bir sunucuda ilk açılışta sırayla:
 
 ```bash
 curl -I https://<alan-adi>/                        # 200
-curl -I https://<alan-adi>/arac/iz-genisligi       # 200 — 404 ise SPA geri düşüşü bozuk
+curl -I https://<alan-adi>/arac/trace-width        # 200 — 404 ise SPA geri düşüşü bozuk
+curl -I https://<alan-adi>/en/tool/trace-width     # 200 — İngilizce ağaç (prerender'lı)
+curl -I https://<alan-adi>/en                      # 200 — dist/en.html
 curl -s  https://<alan-adi>/api/health             # {"status":"ok"}
 curl -s  https://<alan-adi>/api/health/ready       # {"status":"ready"} — veritabanı bağlantısı
 curl -s  https://<alan-adi>/healthz                # ok — nginx'in kendisi
@@ -222,8 +224,25 @@ docker compose logs api | grep -i "uyarı\|warn"    # SMTP / yazı tipi uyarıla
 ```
 
 Derin bağlantı denetimi ilk sıradadır: `BrowserRouter` kullanılıyor ve
-`/arac/...` diye bir dosya yok. `nginx.conf`'taki `try_files $uri $uri/ /index.html`
-düşerse site ilk açılışta çalışır, **sayfa yenilendiğinde 404 verir**.
+prerender'lanmamış bir rotanın (`/giris`, `/proje/…`) dosya karşılığı yok.
+`nginx.conf`'taki zincir
+`try_files $uri $uri.html $uri/index.html /spa-fallback.html /index.html` düşerse
+site ilk açılışta çalışır, **sayfa yenilendiğinde 404 verir**. Zincirin her
+parçasının gerekçesi ölçülmüştür — `docs/prerender-karari.md` §6.
+
+İngilizce satırlar aynı zinciri sınar: `/en/tool/trace-width` isteği
+`dist/en/tool/trace-width.html` dosyasına, `/en` ise `dist/en.html`e düşer
+(`$uri.html` adımı). Yönlendirme görülmemeli — sitemap'teki URL'ler eğik
+çizgisizdir.
+
+`VITE_SITE_URL` ayarlanmadan derlenmiş bir `dist/` yalnız `sitemap.xml`de değil,
+76 sayfanın `<head>`indeki `canonical` ve `hreflang` etiketlerinde de placeholder
+alan adı taşır. Kontrol:
+
+```bash
+curl -s https://<alan-adi>/arac/trace-width | grep -o 'rel="canonical"[^>]*'
+curl -s https://<alan-adi>/sitemap.xml | head -6
+```
 
 ## Bilinen eksikler
 
