@@ -162,11 +162,17 @@ kendiliğinden okumaz** — yeniden yüklenmesi gerekir. Cron:
 **Sunucu dışına kopya olmadan yedek yedek değildir** — script bu değer boşken
 uyarı basar.
 
-Geri yükleme:
+Geri yükleme — üç adım, sırası önemli:
 
 ```bash
+cd /opt/alp-pcb-toolkit/deploy
+set -a; source .env; set +a          # POSTGRES_USER / POSTGRES_DB buradan gelir
+docker compose stop api              # dump --clean ile DROP atar; canlı bağlantı
+                                     # varken çakışır, açılan api migration'ı
+                                     # yarım şemanın üstüne koşabilir
 gunzip -c /var/backups/alp-pcb-toolkit/alp-20260801-030000.sql.gz \
   | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+docker compose start api
 ```
 
 ---
