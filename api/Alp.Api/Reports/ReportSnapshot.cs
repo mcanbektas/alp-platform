@@ -68,11 +68,40 @@ internal static class ReportSnapshot
             {
                 // Aynı kullanıcının iki raporu aynı anda AYNI yeni bölümü
                 // yazmaya çalışırsa ikinci ekleme birincil anahtardan döner.
-                // Yarış zararsızdır — içerik zaten aynıdır, tek yapılacak şey
-                // eklemeyi bırakmaktır. Manifest aşağıda yine yazılır.
+                // İçerik özdeş olduğu için yarış zararsızdır — ama SaveChanges
+                // TEK işlemdir: çakışan satırla birlikte çakışmayanlar da geri
+                // alındı. Yalnızca vazgeçmek, bu isteğe ÖZGÜ blob'ları eksik
+                // bırakır ve aşağıdaki manifest yazımı FK'dan (Restrict) düşer.
+                // Bu yüzden tabloya yeniden bakılır ve hâlâ eksik olanlar bir
+                // kez daha denenir; ikinci deneme de düşerse hata Freeze'in
+                // güvenlik ağına çıkar (rapor snapshot'sız kalır, belge çıkar).
                 foreach (var entry in db.ChangeTracker.Entries<SectionBlob>().ToList())
                 {
                     entry.State = EntityState.Detached;
+                }
+
+                var nowExisting = await db.SectionBlobs
+                    .Where(b => b.UserId == userId && distinct.Contains(b.Hash))
+                    .Select(b => b.Hash)
+                    .ToListAsync(ct);
+                var stillMissing = distinct.Except(nowExisting).ToHashSet();
+
+                for (var i = 0; i < rawSections.Count; i++)
+                {
+                    if (!stillMissing.Remove(hashes[i])) continue;
+                    db.SectionBlobs.Add(new SectionBlob
+                    {
+                        UserId = userId,
+                        Hash = hashes[i],
+                        Content = rawSections[i],
+                        Length = rawSections[i].Length,
+                        CreatedAt = now,
+                    });
+                }
+
+                if (db.ChangeTracker.Entries<SectionBlob>().Any(e => e.State == EntityState.Added))
+                {
+                    await db.SaveChangesAsync(ct);
                 }
             }
         }
@@ -97,11 +126,12 @@ internal static class ReportSnapshot
     public static Task<List<string>> ReadRawAsync(AppDbContext db, Guid reportId, CancellationToken ct = default) =>
         db.ReportSnapshotSections
             .Where(s => s.ReportId == reportId)
-            .OrderBy(s => s.SortOrder)
             .Join(db.SectionBlobs,
                 s => new { s.UserId, s.Hash },
                 b => new { b.UserId, b.Hash },
                 (s, b) => new { s.SortOrder, b.Content })
+            // Sıralama JOIN'DEN SONRA — join'den önceki OrderBy sözleşmede
+            // korunmaz, sırayı koruyormuş gibi görünüp yanıltırdı.
             .OrderBy(x => x.SortOrder)
             .Select(x => x.Content)
             .ToListAsync(ct);

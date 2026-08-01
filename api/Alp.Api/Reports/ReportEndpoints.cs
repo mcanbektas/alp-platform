@@ -9,6 +9,7 @@ using Alp.Domain;
 using Alp.Reports;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace Alp.Api.Reports;
 
@@ -552,13 +553,26 @@ public static class ReportEndpoints
 
     // Kütük satırı yazıldıktan sonra üretimde kullanılan bölümleri dondurur ve
     // kotayı yerinde uygular. Snapshot yazımı raporun ÜRETİLMESİNİ etkilemez:
-    // burada bir şey ters giderse kullanıcı belgesini yine alır, yalnızca o
-    // rapor snapshot'sız kalır ve indirmede eski davranışa düşer.
+    // belge çoktan dizilmiş durumda ve buradaki bir hata yüzünden 500 dönmek,
+    // elde duran belgeyi kullanıcıdan esirgemek olurdu. Ters giderse rapor
+    // snapshot'sız kalır (indirme eski davranışa düşer, liste `hasSnapshot:
+    // false` gösterir) ve hata GÜNLÜĞE yazılır — sessiz kalmaz; yarım kalan
+    // blob'ları temizlik turu toplar.
     private static async Task Freeze(
         AppDbContext db, IConfiguration config, string userId, Guid reportId, IReadOnlyList<string> rawSections)
     {
-        await ReportSnapshot.WriteAsync(db, userId, reportId, rawSections);
-        await ReportSnapshot.EnforceQuotaAsync(db, userId, SnapshotQuotaBytes(config));
+        try
+        {
+            await ReportSnapshot.WriteAsync(db, userId, reportId, rawSections);
+            await ReportSnapshot.EnforceQuotaAsync(db, userId, SnapshotQuotaBytes(config));
+        }
+        catch (Exception ex)
+        {
+            db.ChangeTracker.Clear();
+            db.GetService<ILoggerFactory>()
+                .CreateLogger(typeof(ReportEndpoints))
+                .LogError(ex, "Rapor anlık görüntüsü yazılamadı — {ReportId} snapshot'sız kaldı.", reportId);
+        }
     }
 
     // Kullanıcı başına toplam snapshot boyutu. Aşıldığında en eski snapshot'lar
@@ -575,7 +589,10 @@ public static class ReportEndpoints
     // karşılığı yoktur; dondurmak için yükün kendisi seri hâle getirilir.
     // `StoredSection` bu "eski şekli" (dil haritası olmayan, düz bölüm nesnesi)
     // zaten okuyor — o raporlar kaydedildikleri dilde geri gelir (karar §5).
-    private static List<string> SerializeSections(ReportPayload payload) =>
+    // `internal`: yaz-oku sözleşmesi testli — buradaki serileştirme camelCase
+    // olmaktan çıkarsa StoredSection bölümü tanımaz ve snapshot SESSİZCE boş
+    // kalırdı (bkz. ReportSnapshotTests, tek araç gidiş-dönüşü).
+    internal static List<string> SerializeSections(ReportPayload payload) =>
         [.. payload.Sections.Select(s => JsonSerializer.Serialize(s, StoredSectionJson))];
 
     private static readonly JsonSerializerOptions StoredSectionJson = new(JsonSerializerDefaults.Web);

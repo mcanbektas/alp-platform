@@ -310,6 +310,111 @@ public class ReportSnapshotTests : IDisposable
         Assert.Equal(1, await db.Db.SectionBlobs.CountAsync());
     }
 
+    // Tek araçlık raporun dondurulmuş bölümü, projeli yolun dil haritası değil,
+    // düz bölüm nesnesidir — `StoredSection`ın "eski şekli". Yaz-oku sözleşmesi
+    // burada sınanır: serileştirme camelCase olmaktan çıkarsa `Read` bölümü
+    // tanımaz ve snapshot SESSİZCE boş kalırdı.
+    [Fact]
+    public void Tek_arac_bolumu_yazildigi_gibi_geri_okunur()
+    {
+        var section = new ReportSection(
+            ToolName: "Yol Genişliği",
+            Mode: "Analiz",
+            Inputs: [new ReportField("Akım", "2.5", "A")],
+            Formula: ["I = k·ΔT^0.44·A^0.725"],
+            Results: [new ReportField("Genişlik", "0.62", "mm", true)],
+            Notes: [new ReportNote("ok", "Tüm kontroller geçti")],
+            SchematicSvg: null, SchematicCaption: null, Chart: null);
+        var payload = new ReportPayload(1, "DONANIM RAPORU", "Alp Test", null, "01.08.2026", Labels, "tr", [section]);
+
+        var raw = Assert.Single(ReportEndpoints.SerializeSections(payload));
+        var okunan = Alp.Api.Projects.StoredSection.Read(raw, "tr");
+
+        Assert.NotNull(okunan);
+        Assert.Equal("Yol Genişliği", okunan!.ToolName);
+        Assert.Equal("0.62", okunan.Results![0].Value);
+    }
+
+    // Snapshot yazımı belge üretimini DÜŞÜREMEZ: belge çoktan dizilmiş, hata
+    // yalnızca raporu snapshot'sız bırakır (Freeze'in güvenlik ağı). İkinci
+    // SaveChanges'ten itibaren patlayan bir bağlamla sürülür — ilk kaydetme
+    // kütük satırıdır ve gerçekleşir, sonrası (blob/manifest) düşer.
+    [Fact]
+    public async Task Snapshot_yazimi_dusse_de_rapor_uretimi_200_doner()
+    {
+        var user = db.AddUser("kullanici@test.local");
+        var project = db.AddProject(user);
+        db.AddCalculation(project, reportJson: SectionJson("0.8"));
+
+        var kirilgan = db.NewContext(new FailFromSecondSave());
+        var result = await ReportEndpoints.GenerateProjectReport(
+            project.Id, Request(), kirilgan, TestHttp.For(user), Config(),
+            ReportFormat.Pdf, Build);
+
+        Assert.Equal(StatusCodes.Status200OK, (result as IStatusCodeHttpResult)?.StatusCode ?? 200);
+        // Kütük satırı yazıldı, snapshot yazılamadı — indirme eski davranışa düşer.
+        Assert.Equal(1, await db.Db.Reports.CountAsync());
+        Assert.Equal(0, await db.Db.ReportSnapshotSections.CountAsync());
+    }
+
+    private sealed class FailFromSecondSave : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        private int count;
+
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            if (++count >= 2) throw new DbUpdateException("test: snapshot yazımı düştü");
+            return ValueTask.FromResult(result);
+        }
+    }
+
+    // Yarış: iki rapor aynı anda aynı YENİ bölümü yazarsa ikinci yazma birincil
+    // anahtardan döner. SaveChanges tek işlem olduğu için çakışan satırla
+    // birlikte çakışmayanlar da geri alınır — onarım tabloyu yeniden okuyup
+    // yalnız hâlâ eksik olanı yazmalı. Onarım eksik kalırsa manifest, var
+    // olmayan blob'a FK verip düşerdi (bulunan gerçek kusurun senaryosu).
+    [Fact]
+    public async Task Blob_yarisinda_cakismayan_bolum_kaybolmaz()
+    {
+        var user = db.AddUser("kullanici@test.local");
+        var report = new Report
+        {
+            Id = Guid.NewGuid(),
+            UserId = user.Id,
+            Title = "DONANIM RAPORU",
+            PreparedBy = "Alp Test",
+            Format = ReportFormat.Pdf,
+            GeneratedAt = DateTimeOffset.UtcNow,
+        };
+        db.Db.Reports.Add(report);
+        db.Db.SaveChanges();
+
+        var bolumA = SectionJson("0.8");
+        var bolumB = SectionJson("1.2");
+
+        // Rakip istek, bu bağlam tam kaydedecekken A'yı yazmış olur.
+        var yarisan = db.NewContext(new BeforeFirstSave(() =>
+        {
+            db.Db.SectionBlobs.Add(new SectionBlob
+            {
+                UserId = user.Id,
+                Hash = ReportSnapshot.ComputeHash(bolumA),
+                Content = bolumA,
+                Length = bolumA.Length,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            db.Db.SaveChanges();
+        }));
+
+        await ReportSnapshot.WriteAsync(yarisan, user.Id, report.Id, [bolumA, bolumB]);
+
+        Assert.Equal(2, await db.Db.SectionBlobs.CountAsync());
+        Assert.Equal(2, await db.Db.ReportSnapshotSections.CountAsync(s => s.ReportId == report.Id));
+    }
+
     // Dedup KULLANICI sınırındadır: iki kullanıcının aynı içeriği asla aynı
     // satırı paylaşmaz, yoksa biri hesabını silince öbürünün raporu boşalırdı.
     [Fact]
