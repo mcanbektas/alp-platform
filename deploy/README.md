@@ -249,4 +249,10 @@ curl -s https://<alan-adi>/sitemap.xml | head -6
 - **Migration açılışta uygulanır** (`Database__MigrateOnStartup=true`). Tek
   kopyalı dağıtımda doğru; api birden çok kopyaya çıkarsa kapatılıp ayrı bir
   migration adımına taşınır.
+- **Rapor anlık görüntüsü disk değil veritabanı yer kaplar.** Belge baytları
+  saklanmaz ama üretimdeki bölüm kayıtları `SectionBlobs` tablosunda donar
+  (içerik adresli, kullanıcı başına). Sınır `App__SnapshotQuotaBytes`
+  (varsayılan 100 MB/kullanıcı) ve aşıldığında rapor reddedilmez, en eski
+  snapshot'lar düşürülür. Postgres yedeğinin boyutu bu tablonun toplamı kadar
+  büyür — `docs/rapor-snapshot-karari.md` §2.
 - **Sunucu tarafı otomatik dağıtım yok** — yukarıya bakın.

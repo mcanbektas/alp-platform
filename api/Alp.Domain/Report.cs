@@ -23,8 +23,21 @@ public class Report
 
     public string Title { get; set; } = string.Empty;
     public string PreparedBy { get; set; } = string.Empty;
+
+    // Künyedeki firma. Eskiden kütükte HİÇ saklanmıyordu ve geçmişten indirme
+    // bugünkü profili yazıyordu — firma adı değişince eski rapor da değişmiş
+    // görünüyordu (docs/uyelik-ve-rapor-plani.md §27). Anlık görüntü kararıyla
+    // birlikte künyenin bu alanı da donar. `null`: rapor bu kolon eklenmeden
+    // önce üretildi ya da o gün firma yoktu; indirme yine profile düşer.
+    public string? Company { get; set; }
+
     public int Revision { get; set; } = 1;
     public ReportFormat Format { get; set; }
+
+    // Belgenin şema sürümü. Anlık görüntülü rapor projeden BAĞIMSIZ
+    // indirilebildiği için (proje silinmiş olabilir) bu sayı da rapora yazılır;
+    // eskiden yalnızca hesap satırından okunuyordu.
+    public int SchemaVersion { get; set; }
 
     // Üretilen belge diske yazılmaz, bu yüzden dosya YOLU da yoktur: "tekrar
     // indir" kayıttan yeniden üretmek demektir (bkz. ReportEndpoints saklama
@@ -32,4 +45,8 @@ public class Report
     // hangi boyutta.
     public long FileSize { get; set; }
     public DateTimeOffset GeneratedAt { get; set; }
+
+    // Üretim anındaki bölümlerin manifesti. Boşsa rapor snapshot'sızdır ve
+    // indirme projenin GÜNCEL hâlinden yeniden üretir (eski davranış).
+    public List<ReportSnapshotSection> SnapshotSections { get; set; } = [];
 }

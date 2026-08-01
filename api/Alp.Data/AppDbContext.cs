@@ -11,6 +11,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<Calculation> Calculations => Set<Calculation>();
     public DbSet<Report> Reports => Set<Report>();
+    public DbSet<SectionBlob> SectionBlobs => Set<SectionBlob>();
+    public DbSet<ReportSnapshotSection> ReportSnapshotSections => Set<ReportSnapshotSection>();
     public DbSet<ThicknessRecord> ThicknessRecords => Set<ThicknessRecord>();
 
     // Kullanıcı silinince Project → Calculation/Report zinciri de silinir
@@ -72,6 +74,40 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             // AspNetUsers FK'sı) gerçek silme uygulanır, bkz. sınıf üstü not.
             e.HasOne(r => r.Project).WithMany().HasForeignKey(r => r.ProjectId).OnDelete(DeleteBehavior.SetNull);
             e.HasOne<ApplicationUser>().WithMany().HasForeignKey(r => r.UserId).OnDelete(DeleteBehavior.Cascade);
+            // Künyedeki firma artık kütükte de duruyor; sınır profil ucundaki
+            // ile AYNI kaynaktan gelir, yoksa profile sığmayan bir ad rapor
+            // yoluyla kütüğe kaçardı.
+            e.Property(r => r.Company).HasMaxLength(ApplicationUser.CompanyMaxLength);
+        });
+
+        // ---- Rapor anlık görüntüsü (docs/rapor-snapshot-karari.md) ----
+        //
+        // Bölüm içerikleri İÇERİK ADRESLİ tek bir tabloda, raporlar onlara
+        // manifest üzerinden bakar. Şemanın taşıdığı üç kural:
+        //   1. Dedup kullanıcı sınırındadır — anahtar (UserId, Hash).
+        //   2. Rapor silinince manifest gider, blob kalır; gerçekten sahipsiz
+        //      kalan blob'u temizlik turu toplar (sayaç tutulmaz).
+        //   3. Hesap silinince ikisi de gider (Cascade).
+        builder.Entity<SectionBlob>(e =>
+        {
+            e.HasKey(b => new { b.UserId, b.Hash });
+            e.Property(b => b.Hash).HasMaxLength(SectionBlob.HashLength);
+            e.HasOne(b => b.User).WithMany().HasForeignKey(b => b.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<ReportSnapshotSection>(e =>
+        {
+            // Aynı bölüm aynı raporda iki kez yer alabilir (iki hesap birebir
+            // aynı kaydı taşıyorsa), bu yüzden anahtar sıraya da bakar.
+            e.HasKey(s => new { s.ReportId, s.SortOrder });
+            e.Property(s => s.Hash).HasMaxLength(SectionBlob.HashLength);
+            e.HasOne(s => s.Report).WithMany(r => r.SnapshotSections)
+                .HasForeignKey(s => s.ReportId).OnDelete(DeleteBehavior.Cascade);
+            // Blob'a giden FK'da `Restrict`: manifest dururken içeriği silmek
+            // raporu sessizce yarım bırakırdı. Silme sırası tersinedir —
+            // manifest gider, sonra sahipsiz blob toplanır.
+            e.HasOne(s => s.Blob).WithMany()
+                .HasForeignKey(s => new { s.UserId, s.Hash }).OnDelete(DeleteBehavior.Restrict);
         });
 
         builder.Entity<ThicknessRecord>(e =>

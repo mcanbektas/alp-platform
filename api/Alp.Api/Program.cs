@@ -126,6 +126,10 @@ builder.Services.AddSingleton<ITokenService, TokenService>();
 // Süresi dolmuş yenileme token'larını periyodik siler — gerekçe sınıfın
 // üstünde. İptal edilmiş ama süresi dolmamış satırlara DOKUNMAZ.
 builder.Services.AddHostedService<RefreshTokenCleanupService>();
+// Rapor anlık görüntülerinin bakımı: sahipsiz bölüm blob'larını toplar ve
+// kotayı aşan kullanıcının en eski snapshot'larını düşürür. Kota üretim
+// isteğinde de uygulanıyor; bu tur güvenlik ağıdır (ReportSnapshot).
+builder.Services.AddHostedService<ReportSnapshotCleanupService>();
 
 // ---- E-posta ----
 // SMTP bilgisi verilmişse gerçek gönderici, verilmemişse konsol göndericisi.

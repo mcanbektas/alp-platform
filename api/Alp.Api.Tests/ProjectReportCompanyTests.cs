@@ -37,7 +37,7 @@ public class ProjectReportCompanyTests
         var project = host.AddProject(user);
         host.AddCalculation(project, reportJson: GecerliBolum);
 
-        var (payload, _) = await ReportEndpoints.ProjectPayload(
+        var (payload, _, _) = await ReportEndpoints.ProjectPayload(
             host.Db, project.Id, user.Id, "Rapor", "Alp Test", sirket, "31.07.2026", Etiketler, "tr");
         return payload;
     }

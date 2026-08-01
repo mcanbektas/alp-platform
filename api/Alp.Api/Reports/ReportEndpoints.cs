@@ -17,22 +17,26 @@ public static class ReportEndpoints
     // §4.4: "Rapor yükü boyut sınırı (varsayılan 5 MB); SVG dizeleri şişebilir."
     private const long ReportBodyLimitBytes = 5 * 1024 * 1024;
 
-    // ---- Saklama politikası: üretilen belge diske YAZILMAZ ----
+    // ---- Saklama politikası: BELGE değil, BÖLÜMLER saklanır ----
     //
-    // Karar (2026-07-30, kullanıcı): rapor dosyası sunucuda tutulmaz. Gerekçe
+    // Karar (2026-07-30, kullanıcı): rapor DOSYASI sunucuda tutulmaz. Gerekçe
     // ve alternatifler docs/kod-incelemesi-2026-07-29.md "Üretilen rapor
     // dosyalarında saklama sınırı yok" maddesinde: dosya tutan her seçenek
     // temizlik görevi ya da kota gerektiriyordu (tek kullanıcı hız sınırının
-    // izin verdiği tempoda günde ~290 MB üretebiliyor).
+    // izin verdiği tempoda günde ~290 MB üretebiliyor). Bu karar DURUYOR —
+    // PDF/XLSX baytları hâlâ hiçbir yere yazılmaz.
     //
-    // Rapor türetilmiş veridir: kaynağı kaydedilmiş hesapların `ReportJson`
-    // bölümleridir ve onlar veritabanında zaten duruyor. Bu yüzden "tekrar
-    // indir" bir dosya kopyası değil, kayıttan YENİDEN ÜRETİMDİR (bkz.
-    // Download). `Reports` tablosu kütük olarak kalır: hangi rapor, kim,
-    // ne zaman, kaç bayt.
+    // Ek (2026-08-01, docs/rapor-snapshot-karari.md): yeniden üretimin geçmişi
+    // değil BUGÜNÜ basması kusurdu. 12 Mart'ta basılan rapor, hesap 20 Mart'ta
+    // değiştiğinde 25 Mart'ta indirildiğinde yeni sayıyı gösteriyor ama üstünde
+    // 12 Mart yazıyordu. Bu yüzden üretimde kullanılan BÖLÜMLERİN ham kopyası
+    // dondurulur (`SectionBlobs` + `ReportSnapshotSections`, içerik-adresli):
+    // belge yine dizgi anında üretilir, ama kaynağı o günkü içeriktir.
     //
-    // Bunun kabul edilen sınırı: projeye kaydedilmemiş tek seferlik bir rapor
-    // geri getirilemez — o ekranın verisi hiçbir yerde durmuyor.
+    // `Reports` tablosu kütük olmayı sürdürür (kim, ne zaman, hangi biçim, kaç
+    // bayt) ve künyenin donan parçalarını da taşır (firma, şema sürümü).
+    // Snapshot'ı olmayan kayıtlarda — göç öncesi raporlar ve kotayla
+    // geriletilenler — eski davranış aynen sürer.
     public static void MapReportEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/reports").RequireAuthorization();
@@ -83,15 +87,22 @@ public static class ReportEndpoints
     // Kimlik denetimi delegede (GenerateProjectReport) — burada tekrarı
     // ölü koddu, XLSX kardeşi de zaten taşımıyor.
     private static Task<IResult> GenerateProjectPdf(
-        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, PdfReportBuilder builder) =>
-        GenerateProjectReport(id, req, db, http, ReportFormat.Pdf, builder.Build);
+        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http,
+        IConfiguration config, PdfReportBuilder builder) =>
+        GenerateProjectReport(id, req, db, http, config, ReportFormat.Pdf, builder.Build);
 
     private static Task<IResult> GenerateProjectXlsx(
-        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, XlsxReportBuilder builder) =>
-        GenerateProjectReport(id, req, db, http, ReportFormat.Xlsx, builder.Build);
-
-    private static async Task<IResult> GenerateProjectReport(
         Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http,
+        IConfiguration config, XlsxReportBuilder builder) =>
+        GenerateProjectReport(id, req, db, http, config, ReportFormat.Xlsx, builder.Build);
+
+    // `internal`: anlık görüntünün ÜRETİM anında yazılması burada oluyor ve
+    // testler dizgiyi taklit eden bir `build` ile bu yolu doğrudan sürüyor
+    // (bkz. Alp.Api.Tests/ReportSnapshotTests.cs). Gerçek dizgicilerle koşmak
+    // sınanan kuralı değiştirmezdi, yalnız her testi bir PDF üretimi kadar
+    // yavaşlatırdı.
+    internal static async Task<IResult> GenerateProjectReport(
+        Guid id, ProjectReportRequest req, AppDbContext db, HttpContext http, IConfiguration config,
         ReportFormat format, Func<ReportPayload, byte[]> build)
     {
         var userId = CurrentUserId(http);
@@ -121,7 +132,7 @@ public static class ReportEndpoints
         var projectName = await OwnedProjectName(db, id, userId);
         if (projectName is null) return Results.NotFound(new ApiError("PROJECT_NOT_FOUND"));
 
-        var (payload, tooLarge) = await ProjectPayload(
+        var (payload, tooLarge, rawSections) = await ProjectPayload(
             db, id, userId, req.Title.Trim(), req.PreparedBy.Trim(), req.Company?.Trim(),
             req.Date, req.Labels, req.Lang ?? "tr");
         if (tooLarge) return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
@@ -144,6 +155,9 @@ public static class ReportEndpoints
 
         var isPdf = format == ReportFormat.Pdf;
         var record = await LogReport(db, userId, payload, format, bytes, id);
+        // Kaynak bölümlerin HAM hâli dondurulur: proje sonradan değişse de bu
+        // rapor bugünkü sayıları basmaya devam eder.
+        await Freeze(db, config, userId, record.Id, rawSections);
 
         return Results.File(
             bytes,
@@ -156,6 +170,7 @@ public static class ReportEndpoints
         [FromQuery] Guid? projectId,
         PdfReportBuilder builder,
         AppDbContext db,
+        IConfiguration config,
         HttpContext http)
     {
         var userId = CurrentUserId(http);
@@ -187,6 +202,7 @@ public static class ReportEndpoints
         }
 
         var record = await LogReport(db, userId, payload, ReportFormat.Pdf, bytes, projectId);
+        await Freeze(db, config, userId, record.Id, SerializeSections(payload));
 
         return Results.File(bytes, PdfContentType, DownloadName(payload, projectName, record, "pdf"));
     }
@@ -196,6 +212,7 @@ public static class ReportEndpoints
         [FromQuery] Guid? projectId,
         XlsxReportBuilder builder,
         AppDbContext db,
+        IConfiguration config,
         HttpContext http)
     {
         var userId = CurrentUserId(http);
@@ -224,6 +241,7 @@ public static class ReportEndpoints
             return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
         }
         var record = await LogReport(db, userId, payload, ReportFormat.Xlsx, bytes, projectId);
+        await Freeze(db, config, userId, record.Id, SerializeSections(payload));
 
         return Results.File(bytes, XlsxContentType, DownloadName(payload, projectName, record, "xlsx"));
     }
@@ -245,27 +263,38 @@ public static class ReportEndpoints
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
 
+        // `HasSnapshot`: bu rapor indirildiğinde O GÜNKÜ içerik mi basılacak,
+        // yoksa projenin güncel hâlinden mi üretilecek. Ayrım kullanıcıya
+        // gösterilmek zorundadır (docs/rapor-snapshot-karari.md §3) — aynı
+        // listede iki farklı davranış var ve hangisinin geçerli olduğu belgeden
+        // anlaşılmıyor.
         var reports = await db.Reports
             .Where(r => r.UserId == userId)
             .OrderByDescending(r => r.GeneratedAt)
-            .Select(r => new ReportSummary(r.Id, r.Title, r.PreparedBy, r.Format, r.FileSize, r.GeneratedAt))
+            .Select(r => new ReportSummary(
+                r.Id, r.Title, r.PreparedBy, r.Format, r.FileSize, r.GeneratedAt,
+                r.SnapshotSections.Count > 0))
             .ToListAsync();
 
         return Results.Ok(reports);
     }
 
-    // ---- Geçmişten indirme = kayıttan yeniden üretim ----
+    // ---- Geçmişten indirme ----
     //
     // Dosya saklanmadığı için (bkz. MapReportEndpoints üstündeki not) burada
-    // diskten okunacak bir şey yok: rapor, projedeki hesapların kaydedilmiş
-    // `ReportJson` bölümlerinden yeniden dizilir. Bölümler istemcinin gönderdiği
-    // hâlleriyle (SVG dahil) duruyor, yani belge içerik olarak aynı çıkar.
+    // diskten okunacak belge yok. İki kaynak sırayla denenir:
     //
-    // Bilinçli iki fark:
-    //   - Belgenin tarihi ilk üretimin günüdür (`GeneratedAt`), yeniden basma
-    //     günü değil. İndirilen belge "o gün alınmış rapor" olarak okunur.
-    //   - Proje o günden beri değiştiyse rapor GÜNCEL hâli gösterir; anlık
-    //     görüntü saklanmıyor. Değişmemiş bir projede sonuç birebir aynıdır.
+    //   1. ANLIK GÖRÜNTÜ — raporun üretildiği andaki bölümler
+    //      (`ReportSnapshotSections` + `SectionBlobs`). Proje o günden beri
+    //      değişmiş olsa da belge o günkü sayıları basar; projesi silinmiş
+    //      olsa bile indirilebilir. docs/rapor-snapshot-karari.md.
+    //   2. Snapshot yoksa (göç öncesi kayıtlar ve kotayla geriletilenler)
+    //      eski davranış: projedeki hesapların GÜNCEL `ReportJson`'larından
+    //      yeniden dizilir.
+    //
+    // İki kaynakta da değişmeyenler: belgenin tarihi ilk üretimin günüdür
+    // (`GeneratedAt`), dil ve çerçeve metni indirme isteğinden gelir — yani
+    // aynı rapor sonradan öbür dilde de indirilebilir.
     private static async Task<IResult> Download(
         Guid id,
         ReportLabelsRequest req,
@@ -277,48 +306,11 @@ public static class ReportEndpoints
         var userId = CurrentUserId(http);
         if (userId is null) return Results.Unauthorized();
 
-        var report = await db.Reports
-            .Where(r => r.Id == id)
-            .Select(r => new
-            {
-                r.UserId,
-                r.ProjectId,
-                r.Title,
-                r.PreparedBy,
-                r.Format,
-                r.GeneratedAt,
-                // Proje silinmişse FK `SetNull`'a düşer, yani ProjectId de null olur.
-                ProjectName = r.Project == null ? null : r.Project.Name,
-            })
-            .FirstOrDefaultAsync();
+        var (source, error) = await DownloadSource(db, id, userId, req);
+        if (error is not null) return error;
 
-        // Var olmayan ve başkasına ait rapor AYNI yanıtı verir — hangisi
-        // olduğunu dışarı sızdırmaz.
-        if (report is null || report.UserId != userId) return Results.NotFound();
-
-        // Projesiz (tek araçtan alınmış) rapor ile projesi sonradan silinmiş
-        // rapor aynı yere düşer: yeniden üretecek kaynak veri yok. 404 DEĞİL —
-        // kayıt duruyor ve kullanıcının onu görmesi doğru; eksik olan kaynak.
-        if (report.ProjectId is null)
-        {
-            return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-project" }));
-        }
-
-        // Firma `null` geçilir, yani PROFİLDEKİ değer okunur. Kütükte firma
-        // saklanmıyor (Report yalnız başlık ve hazırlayanı taşır), dolayısıyla
-        // o günkü tek seferlik düzenleme geri getirilemez — uydurmak yerine
-        // bugünkü profil yazılır. Geçmişten indirme zaten yeniden ÜRETİMDİR.
-        var (payload, tooLarge) = await ProjectPayload(
-            db, report.ProjectId.Value, userId, report.Title, report.PreparedBy, null,
-            report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture), req.Labels, req.Lang ?? "tr");
-
-        if (tooLarge) return Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE"));
-        if (payload is null)
-        {
-            return Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-sections" }));
-        }
-
-        var isPdf = report.Format == ReportFormat.Pdf;
+        var payload = source!.Payload;
+        var isPdf = source.Format == ReportFormat.Pdf;
         byte[] bytes;
         try
         {
@@ -334,9 +326,96 @@ public static class ReportEndpoints
 
         // Ad, üretim yolundaki kuralın proje dalıyla aynı: projeyi ayırt eden
         // şey adıdır, `Title` bütün raporlarda aynı sabittir ("DONANIM RAPORU").
-        var basis = string.IsNullOrWhiteSpace(report.ProjectName) ? report.Title : report.ProjectName;
-        var name = $"{Slugify(basis)}-{IsoDate(report.GeneratedAt)}{LangSuffix(req.Lang)}.{ext}";
+        var basis = string.IsNullOrWhiteSpace(source.ProjectName) ? payload.Title : source.ProjectName;
+        var name = $"{Slugify(basis)}-{IsoDate(source.GeneratedAt)}{LangSuffix(req.Lang)}.{ext}";
         return Results.File(bytes, contentType, name);
+    }
+
+    // İndirilecek belgenin YÜKÜNÜ çözer; dizgi çağırana aittir. Ayrılmasının
+    // nedeni sınanabilirlik: donmuş içerik kuralları (hangi kaynak, firmanın
+    // hangi dalda profile düştüğü, silinmiş projede ne olduğu) PDF üretmeden
+    // doğrudan sınanır — bkz. Alp.Api.Tests/ReportSnapshotTests.cs.
+    internal sealed record DownloadPayload(
+        ReportPayload Payload, ReportFormat Format, string? ProjectName, DateTimeOffset GeneratedAt);
+
+    internal static async Task<(DownloadPayload? Source, IResult? Error)> DownloadSource(
+        AppDbContext db, Guid id, string userId, ReportLabelsRequest req)
+    {
+        var report = await db.Reports
+            .Where(r => r.Id == id)
+            .Select(r => new
+            {
+                r.UserId,
+                r.ProjectId,
+                r.Title,
+                r.PreparedBy,
+                r.Company,
+                r.SchemaVersion,
+                r.Format,
+                r.GeneratedAt,
+                // Proje silinmişse FK `SetNull`'a düşer, yani ProjectId de null olur.
+                ProjectName = r.Project == null ? null : r.Project.Name,
+            })
+            .FirstOrDefaultAsync();
+
+        // Var olmayan ve başkasına ait rapor AYNI yanıtı verir — hangisi
+        // olduğunu dışarı sızdırmaz.
+        if (report is null || report.UserId != userId) return (null, Results.NotFound());
+
+        var lang = req.Lang ?? "tr";
+        var date = report.GeneratedAt.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture);
+
+        ReportPayload? payload;
+        var frozen = await ReportSnapshot.ReadRawAsync(db, id);
+        if (frozen.Count > 0)
+        {
+            var sections = new List<ReportSection>(frozen.Count);
+            foreach (var raw in frozen)
+            {
+                // Bozuk bölüm burada da yalnızca kendi satırını kaybettirir —
+                // kural projeden üretim yolundakiyle aynı.
+                var section = StoredSection.Read(raw, lang);
+                if (section is not null) sections.Add(section);
+            }
+
+            if (sections.Count == 0)
+            {
+                return (null, Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-sections" })));
+            }
+
+            // Firma DONMUŞTUR: snapshot'lı raporda `null`, "o gün firma
+            // yazılmadı" demektir ve profile düşülmez. Snapshot'sız raporda
+            // (aşağıdaki dal) tersi geçerlidir — kütükte o gün firma hiç
+            // saklanmıyordu, uydurmak yerine bugünkü profil yazılır.
+            var company = string.IsNullOrWhiteSpace(report.Company) ? null : report.Company;
+            payload = new ReportPayload(
+                report.SchemaVersion, report.Title, report.PreparedBy, company,
+                date, req.Labels, lang, sections);
+        }
+        else
+        {
+            // Projesiz (tek araçtan alınmış) rapor ile projesi sonradan silinmiş
+            // rapor aynı yere düşer: yeniden üretecek kaynak veri yok. 404 DEĞİL —
+            // kayıt duruyor ve kullanıcının onu görmesi doğru; eksik olan kaynak.
+            if (report.ProjectId is null)
+            {
+                return (null, Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-project" })));
+            }
+
+            var (built, tooLarge, _) = await ProjectPayload(
+                db, report.ProjectId.Value, userId, report.Title, report.PreparedBy, null,
+                date, req.Labels, lang);
+
+            if (tooLarge) return (null, Results.UnprocessableEntity(new ApiError("REPORT_TOO_LARGE")));
+            if (built is null)
+            {
+                return (null, Results.Conflict(new ApiError("REPORT_NOT_REPRODUCIBLE", new { reason = "no-sections" })));
+            }
+
+            payload = built;
+        }
+
+        return (new DownloadPayload(payload, report.Format, report.ProjectName, report.GeneratedAt), null);
     }
 
     // Projedeki kaydedilmiş hesaplardan rapor yükünü kurar. `null` dönmesi
@@ -350,7 +429,12 @@ public static class ReportEndpoints
     // olduğu gibi kullanılır — üç durumun anlamı ProjectReportRequest'te yazılı.
     // `internal`: künye kuralları (özellikle firmanın üç durumu) doğrudan
     // sınanıyor — bkz. Alp.Api.Tests/ProjectReportCompanyTests.cs.
-    internal static async Task<(ReportPayload? Payload, bool TooLarge)> ProjectPayload(
+    //
+    // Üçüncü dönüş değeri `Raw`: belgeye GİREN bölümlerin ham dizeleri, aynı
+    // sırada. Anlık görüntü bunları dondurur (ReportSnapshot) — okunamayan ve
+    // bu yüzden belgeye girmeyen bir kayıt snapshot'a da girmez, yoksa iki
+    // taraf ayrışırdı.
+    internal static async Task<(ReportPayload? Payload, bool TooLarge, List<string> Raw)> ProjectPayload(
         AppDbContext db, Guid projectId, string userId, string title, string preparedBy,
         string? company, string date, ReportLabels labels, string lang)
     {
@@ -359,7 +443,7 @@ public static class ReportEndpoints
         var totalChars = await db.Calculations
             .Where(c => c.ProjectId == projectId && c.ReportJson != null)
             .SumAsync(c => (long)c.ReportJson!.Length);
-        if (totalChars > ProjectReportSourceBudgetChars) return (null, true);
+        if (totalChars > ProjectReportSourceBudgetChars) return (null, true, []);
 
         var stored = await db.Calculations
             .Where(c => c.ProjectId == projectId && c.ReportJson != null)
@@ -368,6 +452,7 @@ public static class ReportEndpoints
             .ToListAsync();
 
         var sections = new List<ReportSection>();
+        var raw = new List<string>();
         var schemaVersion = 0;
         foreach (var row in stored)
         {
@@ -376,10 +461,11 @@ public static class ReportEndpoints
             // diğerlerinin raporunu engellemez.
             if (section is null) continue;
             sections.Add(section);
+            raw.Add(row.ReportJson!);
             if (schemaVersion == 0) schemaVersion = row.SchemaVersion;
         }
 
-        if (sections.Count == 0) return (null, false);
+        if (sections.Count == 0) return (null, false, []);
 
         // Profil YALNIZCA alan hiç gelmediğinde okunur. Sorgu da o zaman
         // çalışır: künyeyi zaten taşıyan istekte gereksiz bir tur atmaz.
@@ -392,7 +478,10 @@ public static class ReportEndpoints
         // bekliyor, boş dize başlıkta boş bir satır bırakırdı.
         if (string.IsNullOrWhiteSpace(effectiveCompany)) effectiveCompany = null;
 
-        return (new ReportPayload(schemaVersion, title, preparedBy, effectiveCompany, date, labels, lang, sections), false);
+        return (
+            new ReportPayload(schemaVersion, title, preparedBy, effectiveCompany, date, labels, lang, sections),
+            false,
+            raw);
     }
 
 
@@ -434,6 +523,10 @@ public static class ReportEndpoints
     // Belge diske yazılmaz, yalnızca kütüğe geçer. `FileSize` üretilen belgenin
     // boyutudur ve saklanmasının nedeni ölçüm/kütük: kullanıcı ne kadar rapor
     // üretti, hangi boyutta — bir dosyayı bulmak için değil.
+    //
+    // Künyenin donan parçaları da burada yazılır (firma, şema sürümü): anlık
+    // görüntülü rapor projeden bağımsız indirilebiliyor, dolayısıyla künyesi de
+    // projeden okunamaz (docs/rapor-snapshot-karari.md §1).
     private static async Task<Report> LogReport(
         AppDbContext db, string userId,
         ReportPayload payload, ReportFormat format, byte[] bytes, Guid? projectId = null)
@@ -445,6 +538,8 @@ public static class ReportEndpoints
             UserId = userId,
             Title = payload.Title,
             PreparedBy = payload.PreparedBy,
+            Company = payload.Company,
+            SchemaVersion = payload.SchemaVersion,
             Revision = 1,
             Format = format,
             FileSize = bytes.LongLength,
@@ -454,6 +549,36 @@ public static class ReportEndpoints
         await db.SaveChangesAsync();
         return report;
     }
+
+    // Kütük satırı yazıldıktan sonra üretimde kullanılan bölümleri dondurur ve
+    // kotayı yerinde uygular. Snapshot yazımı raporun ÜRETİLMESİNİ etkilemez:
+    // burada bir şey ters giderse kullanıcı belgesini yine alır, yalnızca o
+    // rapor snapshot'sız kalır ve indirmede eski davranışa düşer.
+    private static async Task Freeze(
+        AppDbContext db, IConfiguration config, string userId, Guid reportId, IReadOnlyList<string> rawSections)
+    {
+        await ReportSnapshot.WriteAsync(db, userId, reportId, rawSections);
+        await ReportSnapshot.EnforceQuotaAsync(db, userId, SnapshotQuotaBytes(config));
+    }
+
+    // Kullanıcı başına toplam snapshot boyutu. Aşıldığında en eski snapshot'lar
+    // düşürülür — rapor reddedilmez (karar §2).
+    internal static long SnapshotQuotaBytes(IConfiguration config)
+    {
+        var raw = config["App:SnapshotQuotaBytes"];
+        return long.TryParse(raw, out var value) && value > 0 ? value : DefaultSnapshotQuotaBytes;
+    }
+
+    private const long DefaultSnapshotQuotaBytes = 100L * 1024 * 1024;
+
+    // Tek araçlık raporun bölümleri istemciden gelir ve veritabanında bir
+    // karşılığı yoktur; dondurmak için yükün kendisi seri hâle getirilir.
+    // `StoredSection` bu "eski şekli" (dil haritası olmayan, düz bölüm nesnesi)
+    // zaten okuyor — o raporlar kaydedildikleri dilde geri gelir (karar §5).
+    private static List<string> SerializeSections(ReportPayload payload) =>
+        [.. payload.Sections.Select(s => JsonSerializer.Serialize(s, StoredSectionJson))];
+
+    private static readonly JsonSerializerOptions StoredSectionJson = new(JsonSerializerDefaults.Web);
 
     private static string? CurrentUserId(HttpContext http) =>
         http.User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
@@ -544,7 +669,11 @@ public static class ReportEndpoints
     }
 }
 
-public record ReportSummary(Guid Id, string Title, string PreparedBy, ReportFormat Format, long FileSize, DateTimeOffset GeneratedAt);
+// `HasSnapshot` false ise indirme projenin GÜNCEL hâlinden üretir; true ise
+// raporun üretildiği andaki içerik basılır (docs/rapor-snapshot-karari.md).
+public record ReportSummary(
+    Guid Id, string Title, string PreparedBy, ReportFormat Format, long FileSize,
+    DateTimeOffset GeneratedAt, bool HasSnapshot);
 
 // Kütükten yeniden indirme gövdesi — yalnız çerçeve metni taşır; künye
 // (başlık, hazırlayan, tarih) kaydın kendisinden okunur.
