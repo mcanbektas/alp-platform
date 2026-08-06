@@ -18,6 +18,9 @@ public record ResendConfirmationRequest(string Email, string? Lang = null);
 // ZORUNLUDUR: erişim token'ı ele geçirilmiş bir oturum, parolayı da
 // değiştirip hesabı büsbütün devralamasın diye.
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+// Hesabın büsbütün silinmesi. Mevcut parola aynı gerekçeyle ZORUNLUDUR ve
+// burada bedeli daha ağırdır: parola değişimi geri alınabilir, silme alınamaz.
+public record DeleteAccountRequest(string CurrentPassword);
 public record ResetPasswordRequest(string Email, string Token, string NewPassword);
 
 public record LoginResponse(string AccessToken, DateTimeOffset ExpiresAt);

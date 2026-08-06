@@ -50,6 +50,10 @@ public static class AuthEndpoints
         // "writes" yetmez, "auth" ise IP başına ve login'le ortak olduğundan
         // meşru kullanıcıyı kilitlerdi (gerekçe: Program.cs, "password").
         me.MapPost("/password", ChangePassword).RequireRateLimiting("password").LimitBodySize(AuthBodyLimitBytes);
+        // Hesap silme DELETE değil POST: mevcut parolayı gövdede taşıyor ve
+        // istemcinin `api.del()` yardımcısı gövde göndermiyor. Parola denemesi
+        // içerdiği için sınırı da parola değiştirmeyle aynı kovada.
+        me.MapPost("/delete", DeleteMe).RequireRateLimiting("password").LimitBodySize(AuthBodyLimitBytes);
     }
 
     // appsettings.json anahtarı boş dize olarak commit edilir (gizli değer
@@ -526,6 +530,96 @@ public static class AuthEndpoints
             .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.RevokedAt, now));
 
         return await IssueSession(user, tokenService, db, http, env, persistent);
+    }
+
+    // Hesabın ve ona bağlı her şeyin silinmesi. KVKK m.7 / m.11 silme hakkının
+    // karşılığıdır; aydınlatma metni bu ucu tarif eder.
+    //
+    // Silme VERİTABANI CASCADE'İNE BIRAKILMAZ, elle ve bağımlılık sırasıyla
+    // yapılır. İki ölçülmüş gerekçe:
+    //
+    // 1. `ThicknessRecords`in hiç foreign key'i yok (AppDbContext yalnız dizin
+    //    kuruyor, migration'da `table.ForeignKey` yok). Kullanıcı satırı
+    //    silindiğinde bu satırlar sessizce KALIR — ölü bir özelliğin tablosu
+    //    ama `UserId` taşıyor, yani geride kişisel veri bırakır.
+    // 2. `ReportSnapshotSections → SectionBlobs` bağı `Restrict`. Kullanıcı
+    //    silindiğinde Postgres iki cascade tetikleyicisini FK'ların OLUŞTURULMA
+    //    SIRASINA göre işletir; bugün çalışmasının tek nedeni `Reports` FK'sının
+    //    daha eski olması (manifest önce gidiyor). Sıra terse döndüğünde silme
+    //    FK ihlaliyle patlıyor (üretilerek doğrulandı). `Reports→AspNetUsers`
+    //    bağını yeniden kuran herhangi bir migration bunu çalışma anında kırardı.
+    //
+    // Elle silme her iki tuzağı da kapatır ve sırayı görünür kılar.
+    internal static async Task<IResult> DeleteMe(
+        DeleteAccountRequest req,
+        UserManager<ApplicationUser> userManager,
+        AppDbContext db,
+        HttpContext http)
+    {
+        if (string.IsNullOrWhiteSpace(req.CurrentPassword))
+        {
+            return Results.BadRequest(new ApiError("MISSING_FIELDS"));
+        }
+
+        var user = await CurrentUser(userManager, http);
+        if (user is null)
+        {
+            return Results.Json(new ApiError("UNAUTHORIZED"), statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        // Yanlış parola 401 DEĞİL 400 döner. 401 olsaydı istemci bunu oturumun
+        // düşmesi sanıp sessiz yenileme deneyip kullanıcıyı çıkışa atardı
+        // (web/src/lib/api.js). Oturum geçerli, yanlış olan parola.
+        if (!await userManager.CheckPasswordAsync(user, req.CurrentPassword))
+        {
+            return Results.BadRequest(new ApiError("INVALID_CREDENTIALS"));
+        }
+
+        var userId = user.Id;
+
+        // Yürütme stratejisi üzerinden: bağlam `EnableRetryOnFailure` ile
+        // kurulu (Program.cs) ve yeniden deneyen bir strateji, elle açılmış
+        // işlemi doğrudan kabul etmez — sarmalanmazsa üretimde InvalidOperation
+        // ile patlar, testlerin SQLite'ında ise fark edilmezdi.
+        var strategy = db.Database.CreateExecutionStrategy();
+        var deleted = await strategy.ExecuteAsync(async () =>
+        {
+            await using var tx = await db.Database.BeginTransactionAsync();
+
+            // Sıra bağlayıcıdır: manifest, blob'a `Restrict` ile bağlı.
+            await db.ReportSnapshotSections.Where(s => s.UserId == userId).ExecuteDeleteAsync();
+            await db.SectionBlobs.Where(b => b.UserId == userId).ExecuteDeleteAsync();
+            await db.Reports.Where(r => r.UserId == userId).ExecuteDeleteAsync();
+            await db.Calculations.Where(c => c.Project!.UserId == userId).ExecuteDeleteAsync();
+            await db.Projects.Where(p => p.UserId == userId).ExecuteDeleteAsync();
+            await db.RefreshTokens.Where(t => t.UserId == userId).ExecuteDeleteAsync();
+            // FK'si olmayan tek tablo — bunu silen başka hiçbir şey yok.
+            await db.ThicknessRecords.Where(r => r.UserId == userId).ExecuteDeleteAsync();
+
+            // Kullanıcı satırı en sonda. Identity'nin kendi yan tabloları
+            // (AspNetUserClaims/Logins/Roles/Tokens) buradan cascade ile gider.
+            var result = await userManager.DeleteAsync(user);
+            if (!result.Succeeded)
+            {
+                await tx.RollbackAsync();
+                return result;
+            }
+
+            await tx.CommitAsync();
+            return result;
+        });
+
+        if (!deleted.Succeeded)
+        {
+            return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes = deleted.Errors.Select(e => e.Code) }));
+        }
+
+        // Çerez düşürülür, yoksa tarayıcı silinmiş bir hesabın yenileme
+        // çerezini taşımaya devam eder ve açılışta oturum kurmaya çalışır.
+        // Elde kalan erişim token'ı için ayrıca bir şey gerekmez: her istekte
+        // kullanıcı `sub` ile yeniden okunuyor ve artık bulunamıyor (Program.cs).
+        ClearRefreshCookie(http);
+        return Results.NoContent();
     }
 
     private const int DisplayNameMax = 80;
