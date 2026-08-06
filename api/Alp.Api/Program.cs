@@ -70,6 +70,11 @@ try
             // Login uç noktası kilit durumunu yalnızca parola doğru bilindiğinde
             // açığa çıkarır — bkz. AuthEndpoints.cs → Login.
         })
+        // Rol desteği yalnızca yönetim yüzeyi için var: tek rol tanımlıdır
+        // (`AdminRole.Name`) ve üyeliği yapılandırmadan gelir (`App:AdminEmails`,
+        // AdminSeeder). `AddRoles` `AddEntityFrameworkStores`'tan ÖNCE gelmeli —
+        // RoleStore aksi hâlde kaydedilmez ve RoleManager çözülemez.
+        .AddRoles<IdentityRole>()
         .AddEntityFrameworkStores<AppDbContext>()
         .AddDefaultTokenProviders()
         .AddSignInManager();
@@ -150,6 +155,9 @@ try
 
     builder.Services.AddAuthorization();
     builder.Services.AddSingleton<ITokenService, TokenService>();
+    // Denetim izi yazıcısı — istek kapsamında `AppDbContext`iyle aynı örneği
+    // paylaşır (docs/brifler/11-loglama.md §3). AuditLog.cs
+    builder.Services.AddScoped<AuditLog>();
     // Süresi dolmuş yenileme token'larını periyodik siler — gerekçe sınıfın
     // üstünde. İptal edilmiş ama süresi dolmamış satırlara DOKUNMAZ.
     builder.Services.AddHostedService<RefreshTokenCleanupService>();
@@ -157,6 +165,10 @@ try
     // kotayı aşan kullanıcının en eski snapshot'larını düşürür. Kota üretim
     // isteğinde de uygulanıyor; bu tur güvenlik ağıdır (ReportSnapshot).
     builder.Services.AddHostedService<ReportSnapshotCleanupService>();
+    // Denetim izinin saklama süresi sınırı: App:AuditRetentionDays gün
+    // sınırından eski AuditEvents kaydını periyodik siler.
+    // docs/brifler/11-loglama.md §5 (F3).
+    builder.Services.AddHostedService<AuditCleanupService>();
 
     // ---- E-posta ----
     // SMTP bilgisi verilmişse gerçek gönderici, verilmemişse konsol göndericisi.
@@ -393,6 +405,27 @@ try
         }
     }
 
+    // ---- Yönetim yetkisi ----
+    // `App:AdminEmails` listesindeki hesaplara Admin rolü verilir, listeden
+    // çıkanlardan alınır. Migration'dan SONRA koşar: rol tabloları henüz yoksa
+    // sorgu patlar.
+    //
+    // Hata açılışı DURDURMAZ. Bu yetki uygulamanın çalışması için gerekli
+    // değildir — veritabanı o an erişilemiyorsa uygulamanın ayağa kalkmaması,
+    // yönetim panelinin bir sonraki yeniden başlatmaya kadar gecikmesinden
+    // kötüdür. Sessiz de kalmaz: hata günlüğe düşer.
+    {
+        using var scope = app.Services.CreateScope();
+        try
+        {
+            await AdminSeeder.SyncAsync(scope.ServiceProvider, builder.Configuration, app.Logger);
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogError(ex, "Yönetim yetkisi eşitlenemedi ({Key}).", AdminSeeder.ConfigKey);
+        }
+    }
+
     // Rapor yazı tipleri (Faz 3b). Konteynerde yol `Reports__FontsPath` ile verilir
     // (/app/fonts, bkz. api/Dockerfile); yerelde depodaki dizin kullanılır. Dizin
     // yoksa sessizce atlanır ve PdfReportBuilder platform yazı tipine düşer.
@@ -541,6 +574,7 @@ try
         .RequireRateLimiting("health");
 
     app.MapAuthEndpoints();
+    app.MapAdminEndpoints();
     app.MapReportEndpoints();
     app.MapProjectEndpoints();
 

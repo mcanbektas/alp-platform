@@ -50,10 +50,11 @@ public static class AuthEndpoints
         // "writes" yetmez, "auth" ise IP başına ve login'le ortak olduğundan
         // meşru kullanıcıyı kilitlerdi (gerekçe: Program.cs, "password").
         me.MapPost("/password", ChangePassword).RequireRateLimiting("password").LimitBodySize(AuthBodyLimitBytes);
-        // Hesap silme DELETE değil POST: mevcut parolayı gövdede taşıyor ve
-        // istemcinin `api.del()` yardımcısı gövde göndermiyor. Parola denemesi
-        // içerdiği için sınırı da parola değiştirmeyle aynı kovada.
-        me.MapPost("/delete", DeleteMe).RequireRateLimiting("password").LimitBodySize(AuthBodyLimitBytes);
+        // Kullanıcının kendi hesabını silmesi KALDIRILDI (uç dahil, ekranla
+        // birlikte). Silme yalnızca yönetim panelinden yapılır —
+        // AdminEndpoints.cs. Silme mantığı `AccountDeletion`da durur.
+        // Yasal metinlerdeki silme hakkı başvuru adresi üzerinden anlatılır
+        // (web/src/data/legalText.js).
     }
 
     // appsettings.json anahtarı boş dize olarak commit edilir (gizli değer
@@ -69,6 +70,7 @@ public static class AuthEndpoints
         RegisterRequest req,
         UserManager<ApplicationUser> userManager,
         IEmailSender emailSender,
+        AuditLog auditLog,
         IConfiguration config)
     {
         if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password)
@@ -115,6 +117,15 @@ public static class AuthEndpoints
 
             return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes }));
         }
+
+        await auditLog.WriteAsync(AuditEventCodes.AccountRegistered, actor: user, target: null);
+
+        // Yapılandırmadaki admin listesi hesap AÇILMADAN önce yazılmış olabilir;
+        // açılıştaki eşitleme (AdminSeeder.SyncAsync) o an ortada olmayan hesaba
+        // yetki veremez. Bu satır olmasaydı yetki bir sonraki yeniden başlatmaya
+        // kadar gecikirdi. Yetkinin kaynağı yine yapılandırmadır — kayıt isteği
+        // rol talep edemez.
+        await AdminSeeder.GrantIfListedAsync(userManager, config, user, auditLog);
 
         await SendConfirmationMail(user, userManager, emailSender, config, lang);
 
@@ -168,11 +179,14 @@ public static class AuthEndpoints
     // SignInManager.CheckPasswordSignInAsync bunu güvenli yapmaz: iç PreSignInCheck
     // adımı e-posta doğrulamasını parolayı hiç kontrol etmeden reddediyor — bu
     // yüzden burada UserManager ile elle, sıralı bir akış kuruluyor.
-    private static async Task<IResult> Login(
+    // `internal`: kilitlenme eşiği testi (auth.lockout denetim izi) doğrudan
+    // çağırarak sınar — Refresh'teki kalıpla aynı.
+    internal static async Task<IResult> Login(
         LoginRequest req,
         UserManager<ApplicationUser> userManager,
         ITokenService tokenService,
         AppDbContext db,
+        AuditLog auditLog,
         HttpContext http,
         IWebHostEnvironment env)
     {
@@ -204,7 +218,23 @@ public static class AuthEndpoints
         var passwordOk = await userManager.CheckPasswordAsync(user, req.Password);
         if (!passwordOk)
         {
-            if (userManager.SupportsUserLockout) await userManager.AccessFailedAsync(user);
+            if (userManager.SupportsUserLockout)
+            {
+                var wasLockedOut = await userManager.IsLockedOutAsync(user);
+                await userManager.AccessFailedAsync(user);
+
+                // Yalnız eşiği AŞAN denemede düşer — kilitliyken gelen sonraki
+                // denemeler zaten yukarıdaki erken dönüşe takılır, tekrar
+                // düşmez. Identity eşiğe ulaşınca sayacı kendi içinde sıfırlar
+                // (store.ResetAccessFailedCountAsync), bu yüzden sayı BURADAN
+                // DEĞİL yapılandırılmış eşikten okunur.
+                if (!wasLockedOut && await userManager.IsLockedOutAsync(user))
+                {
+                    await auditLog.WriteAsync(
+                        AuditEventCodes.AuthLockout, actor: null, target: user, http,
+                        new { failedCount = userManager.Options.Lockout.MaxFailedAccessAttempts });
+                }
+            }
             return Results.Json(new ApiError("INVALID_CREDENTIALS"), statusCode: StatusCodes.Status401Unauthorized);
         }
 
@@ -376,10 +406,11 @@ public static class AuthEndpoints
         return Results.Ok();
     }
 
-    private static async Task<IResult> ResetPassword(
+    internal static async Task<IResult> ResetPassword(
         ResetPasswordRequest req,
         UserManager<ApplicationUser> userManager,
-        AppDbContext db)
+        AppDbContext db,
+        AuditLog auditLog)
     {
         var user = await userManager.FindByEmailAsync(req.Email);
         if (user is null)
@@ -403,13 +434,16 @@ public static class AuthEndpoints
             .Where(t => t.UserId == user.Id && t.RevokedAt == null)
             .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.RevokedAt, now));
 
+        await auditLog.WriteAsync(AuditEventCodes.AuthPasswordReset, actor: user, target: null);
+
         return Results.Ok();
     }
 
-    private static async Task<IResult> ConfirmEmail(
+    internal static async Task<IResult> ConfirmEmail(
         [FromQuery] string userId,
         [FromQuery] string token,
-        UserManager<ApplicationUser> userManager)
+        UserManager<ApplicationUser> userManager,
+        AuditLog auditLog)
     {
         var user = await userManager.FindByIdAsync(userId);
         if (user is null)
@@ -423,6 +457,8 @@ public static class AuthEndpoints
             return Results.BadRequest(new ApiError("INVALID_TOKEN"));
         }
 
+        await auditLog.WriteAsync(AuditEventCodes.AccountEmailConfirmed, actor: user, target: null);
+
         return Results.Ok();
     }
 
@@ -434,11 +470,16 @@ public static class AuthEndpoints
         var user = await userManager.FindByIdAsync(id);
         if (user is null) return Results.Unauthorized();
 
-        return Results.Ok(ToMeResponse(user));
+        return Results.Ok(await ToMeResponse(user, userManager));
     }
 
-    private static MeResponse ToMeResponse(ApplicationUser user) =>
-        new(user.Id, user.Email!, user.DisplayName, user.Company, user.Plan);
+    // `isAdmin` yalnızca arayüz içindir — yönetim bağlantısını çizip çizmemeye
+    // yarar. Yetki kararı DEĞİLDİR: admin uçları rolü kendileri doğrular
+    // (AdminEndpoints.RequireAdmin), istemcinin ne gördüğüne bakmazlar.
+    private static async Task<MeResponse> ToMeResponse(
+        ApplicationUser user, UserManager<ApplicationUser> userManager) =>
+        new(user.Id, user.Email!, user.DisplayName, user.Company, user.Plan,
+            await userManager.IsInRoleAsync(user, AdminRole.Name));
 
     private static async Task<IResult> UpdateMe(
         UpdateMeRequest req, UserManager<ApplicationUser> userManager, HttpContext http)
@@ -473,7 +514,7 @@ public static class AuthEndpoints
         var result = await userManager.UpdateAsync(user);
         if (!result.Succeeded) return Results.BadRequest(new ApiError("UPDATE_FAILED"));
 
-        return Results.Ok(ToMeResponse(user));
+        return Results.Ok(await ToMeResponse(user, userManager));
     }
 
     // Parola değiştirme. `ResetPassword` ile aynı iki adımı yapar — parolayı
@@ -483,11 +524,12 @@ public static class AuthEndpoints
     // için yeni bir token basılır: diğer bütün cihazlar düşer, kullanıcı
     // kendi ekranında kalır. Aksi hâlde "parolamı değiştirdim" eylemi
     // kullanıcıyı kendi oturumundan da atardı.
-    private static async Task<IResult> ChangePassword(
+    internal static async Task<IResult> ChangePassword(
         ChangePasswordRequest req,
         UserManager<ApplicationUser> userManager,
         ITokenService tokenService,
         AppDbContext db,
+        AuditLog auditLog,
         HttpContext http,
         IWebHostEnvironment env)
     {
@@ -529,6 +571,8 @@ public static class AuthEndpoints
             .Where(t => t.UserId == user.Id && t.RevokedAt == null)
             .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.RevokedAt, now));
 
+        await auditLog.WriteAsync(AuditEventCodes.AuthPasswordChanged, actor: user, target: null, http);
+
         return await IssueSession(user, tokenService, db, http, env, persistent);
     }
 
@@ -550,81 +594,9 @@ public static class AuthEndpoints
     //    bağını yeniden kuran herhangi bir migration bunu çalışma anında kırardı.
     //
     // Elle silme her iki tuzağı da kapatır ve sırayı görünür kılar.
-    internal static async Task<IResult> DeleteMe(
-        DeleteAccountRequest req,
-        UserManager<ApplicationUser> userManager,
-        AppDbContext db,
-        HttpContext http)
-    {
-        if (string.IsNullOrWhiteSpace(req.CurrentPassword))
-        {
-            return Results.BadRequest(new ApiError("MISSING_FIELDS"));
-        }
-
-        var user = await CurrentUser(userManager, http);
-        if (user is null)
-        {
-            return Results.Json(new ApiError("UNAUTHORIZED"), statusCode: StatusCodes.Status401Unauthorized);
-        }
-
-        // Yanlış parola 401 DEĞİL 400 döner. 401 olsaydı istemci bunu oturumun
-        // düşmesi sanıp sessiz yenileme deneyip kullanıcıyı çıkışa atardı
-        // (web/src/lib/api.js). Oturum geçerli, yanlış olan parola.
-        if (!await userManager.CheckPasswordAsync(user, req.CurrentPassword))
-        {
-            return Results.BadRequest(new ApiError("INVALID_CREDENTIALS"));
-        }
-
-        var userId = user.Id;
-
-        // Yürütme stratejisi üzerinden: bağlam `EnableRetryOnFailure` ile
-        // kurulu (Program.cs) ve yeniden deneyen bir strateji, elle açılmış
-        // işlemi doğrudan kabul etmez — sarmalanmazsa üretimde InvalidOperation
-        // ile patlar, testlerin SQLite'ında ise fark edilmezdi.
-        var strategy = db.Database.CreateExecutionStrategy();
-        var deleted = await strategy.ExecuteAsync(async () =>
-        {
-            await using var tx = await db.Database.BeginTransactionAsync();
-
-            // Sıra bağlayıcıdır: manifest, blob'a `Restrict` ile bağlı.
-            await db.ReportSnapshotSections.Where(s => s.UserId == userId).ExecuteDeleteAsync();
-            await db.SectionBlobs.Where(b => b.UserId == userId).ExecuteDeleteAsync();
-            await db.Reports.Where(r => r.UserId == userId).ExecuteDeleteAsync();
-            await db.Calculations.Where(c => c.Project!.UserId == userId).ExecuteDeleteAsync();
-            await db.Projects.Where(p => p.UserId == userId).ExecuteDeleteAsync();
-            await db.RefreshTokens.Where(t => t.UserId == userId).ExecuteDeleteAsync();
-            // FK'si olmayan tek tablo — bunu silen başka hiçbir şey yok.
-            await db.ThicknessRecords.Where(r => r.UserId == userId).ExecuteDeleteAsync();
-
-            // Kullanıcı satırı en sonda. Identity'nin kendi yan tabloları
-            // (AspNetUserClaims/Logins/Roles/Tokens) buradan cascade ile gider.
-            var result = await userManager.DeleteAsync(user);
-            if (!result.Succeeded)
-            {
-                await tx.RollbackAsync();
-                return result;
-            }
-
-            await tx.CommitAsync();
-            return result;
-        });
-
-        if (!deleted.Succeeded)
-        {
-            return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes = deleted.Errors.Select(e => e.Code) }));
-        }
-
-        // Çerez düşürülür, yoksa tarayıcı silinmiş bir hesabın yenileme
-        // çerezini taşımaya devam eder ve açılışta oturum kurmaya çalışır.
-        // Elde kalan erişim token'ı için ayrıca bir şey gerekmez: her istekte
-        // kullanıcı `sub` ile yeniden okunuyor ve artık bulunamıyor (Program.cs).
-        ClearRefreshCookie(http);
-        return Results.NoContent();
-    }
-
     private const int DisplayNameMax = 80;
 
-    private static async Task<ApplicationUser?> CurrentUser(UserManager<ApplicationUser> userManager, HttpContext http)
+    internal static async Task<ApplicationUser?> CurrentUser(UserManager<ApplicationUser> userManager, HttpContext http)
     {
         var id = http.User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
         return id is null ? null : await userManager.FindByIdAsync(id);

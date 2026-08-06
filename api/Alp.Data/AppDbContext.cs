@@ -14,6 +14,27 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<SectionBlob> SectionBlobs => Set<SectionBlob>();
     public DbSet<ReportSnapshotSection> ReportSnapshotSections => Set<ReportSnapshotSection>();
     public DbSet<ThicknessRecord> ThicknessRecords => Set<ThicknessRecord>();
+    public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+
+    // SQLite `DateTimeOffset`i ORDER BY'da REDDEDER (NotSupportedException) —
+    // değeri metin olarak sakladığı için metin sıralaması yanlış sonuç verirdi.
+    // Postgres'te böyle bir sınır yok (`timestamptz` doğal olarak sıralanır).
+    //
+    // Bu, üretim davranışını testlere göre eğmek DEĞİLDİR: dönüşüm yalnızca
+    // SQLite'ta devreye girer ve orada sıralamayı DOĞRU hâle getirir. Olmasaydı
+    // `CreatedAt`e göre sıralayan her sorgu (yönetim panelindeki kullanıcı
+    // listesi) testte patlar, üretimde çalışırdı — yani test, ürünün sınandığı
+    // yol olmaktan çıkardı.
+    protected override void ConfigureConventions(ModelConfigurationBuilder builder)
+    {
+        base.ConfigureConventions(builder);
+
+        if (Database.ProviderName?.Contains("Sqlite", StringComparison.Ordinal) == true)
+        {
+            builder.Properties<DateTimeOffset>()
+                .HaveConversion<Microsoft.EntityFrameworkCore.Storage.ValueConversion.DateTimeOffsetToBinaryConverter>();
+        }
+    }
 
     // Kullanıcı silinince Project → Calculation/Report zinciri de silinir
     // (Cascade). Bilinçli karar: bir hesap silme ucu eklendiğinde bu, kalıntı
@@ -117,6 +138,17 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             // ThicknessRecord.cs üstünde. Dizinler şema geçmişiyle tutarlılık
             // için yerinde bırakıldı.
             e.HasIndex(t => new { t.UserId, t.NameKey }).IsUnique();
+        });
+
+        // ---- Denetim izi (docs/brifler/11-loglama.md §3) ----
+        // FK yok — yukarıdaki AuditEvent.cs gerekçesiyle aynı. Actor/Target
+        // kullanıcı kimliği düz metin olarak durur, AspNetUsers'a bağlanmaz.
+        builder.Entity<AuditEvent>(e =>
+        {
+            e.Property(a => a.Event).HasMaxLength(64);
+            e.Property(a => a.Ip).HasMaxLength(45);
+            e.HasIndex(a => a.OccurredAt);
+            e.HasIndex(a => a.Event);
         });
     }
 }

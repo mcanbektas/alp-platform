@@ -48,6 +48,7 @@ public class AuthEmailLanguageTests : IDisposable
         })
             .AddEntityFrameworkStores<AppDbContext>()
             .AddDefaultTokenProviders();
+        services.AddScoped<AuditLog>();
 
         provider = services.BuildServiceProvider();
         scope = provider.CreateScope();
@@ -55,6 +56,8 @@ public class AuthEmailLanguageTests : IDisposable
 
     private UserManager<ApplicationUser> Users =>
         scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
+    private AuditLog Audit => scope.ServiceProvider.GetRequiredService<AuditLog>();
 
     private static IConfiguration Config => new ConfigurationBuilder()
         .AddInMemoryCollection(new Dictionary<string, string?> { ["App:FrontendBaseUrl"] = "https://ornek.test" })
@@ -135,7 +138,7 @@ public class AuthEmailLanguageTests : IDisposable
 
         var result = await AuthEndpoints.Register(
             new RegisterRequest(user.Email!, "Baska1Parola!", "Baska Kisi", "en"),
-            Users, mail, Config);
+            Users, mail, Audit, Config);
 
         Assert.Equal(StatusCodes.Status201Created, ResultAssert.Status(result));
         var sent = Assert.Single(mail.Sent);

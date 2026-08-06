@@ -47,10 +47,10 @@ services:
     # Temel dosyadaki log sınırıyla aynı gerekçe — bu servis temel dosyada
     # olmadığı için anchor'ı göremez, sınır burada açık yazılır.
     logging:
-      driver: json-file
+      driver: local
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "20m"
+        max-file: "5"
     mem_limit: 128m
     cpus: 0.5
     volumes:

@@ -93,6 +93,18 @@ cp .env.example .env
 | `WEB_PORT` | Üretimde **80**. Örtü yalnızca 443'ü ekler; 80 temel dosyadan gelir. |
 | `SMTP_*` | **Zorunlu** — aşağıya bakın |
 | `CERTBOT_EMAIL` | Sertifika bildirimleri |
+| `ADMIN_EMAILS` | Yönetim panelini görecek hesapların e-postaları, virgülle ayrılır |
+
+> **Yönetim yetkisinin tek kaynağı `ADMIN_EMAILS`'tir.** Panelden, kayıttan ya
+> da başka bir uçtan admin olunamaz; yetki vermek bu satırı değiştirip `api`yi
+> yeniden başlatmayı gerektirir. Açılışta listedeki hesaplara rol verilir,
+> listeden çıkarılanlardan **alınır** — yani yetkiyi geri almanın yolu da aynı
+> satırdır, elle SQL gerekmez. Adres henüz kayıtlı değilse günlüğe uyarı düşer
+> ve o hesap kayıt olduğu anda yetkiyi alır.
+>
+> Panelde yapılabilen tek yıkıcı işlem hesap silmedir ve yönetici kendi
+> hesabını da başka bir yöneticiyi de silemez. Bir yöneticiyi gerçekten silmek
+> gerekiyorsa önce `ADMIN_EMAILS`ten çıkarılır ve `api` yeniden başlatılır.
 
 > **Alan adı alınınca eklenecek:** `VITE_SITE_URL` henüz `.env`'de yok.
 > `web/scripts/build-sitemap.mjs` `dist/sitemap.xml`'i bu değişkenden üretir;
@@ -205,6 +217,64 @@ alp pull && alp up -d --no-build
 `.github/workflows/deploy.yml` içine `images` işinden sonra SSH ile bağlanan bir
 `deploy` işi eklenir; gereken sırlar `SSH_HOST`, `SSH_USER`, `SSH_KEY`. Sunucu
 yokken bu adım bilerek yazılmadı — kullanılmayan dağıtım sırrı depoda durmamalı.
+
+---
+
+## Günlük okuma (runbook)
+
+İki ayrı kayıt vardır ve karıştırılmamalı: **operasyonel günlük** (ne oluyor —
+uçucu, Docker'ın kendisinde durur) ve **denetim izi** (kim ne yaptı — kalıcı,
+veritabanında durur, panelden okunur). Aşağıdakiler yalnızca birincisi için.
+
+```bash
+# Canlı takip (Ctrl+C ile çık)
+docker compose logs -f api
+docker compose logs -f web        # nginx erişim + hata günlüğü de burada —
+                                   # access.log/error.log imajda stdout/stderr'e
+                                   # symlink'tir, ayrıca `docker exec` gerekmez
+
+# Son N dakika/saat — servis düşünce "ne olmuş" diye baştan taramak yerine
+docker compose logs --since 30m api
+docker compose logs --since 1h web
+
+# Birden çok servis birlikte, zaman damgasıyla
+docker compose logs -f --timestamps api web
+```
+
+**Üretimde** (`ASPNETCORE_ENVIRONMENT=Production`) api'nin konsol çıktısı
+`CompactJsonFormatter` ile tek satır JSON'dur (`Program.cs`) ve `jq` ile
+süzülebilir. Alan adları CompactJsonFormatter'a özgüdür: seviye `@l`'dedir
+(yalnız Information DIŞINDA basılır — bir satırda `@l` yoksa Information'dır),
+zenginleştirilmiş alanlar (`RequestPath`, `ClientIp`, `UserId`, …) `Properties`
+altında DEĞİL doğrudan satırın kökündedir. `--no-log-prefix` servis adı
+önekini kaldırır, aksi hâlde her satırın başındaki `api-1  |` JSON'u bozar
+(gerçek çıktıyla doğrulandı):
+
+```bash
+# Yalnız hata seviyesi ve üstü
+docker compose logs --no-log-prefix --since 1h api | jq -R 'fromjson? // empty' \
+  | jq 'select(.["@l"] == "Error" or .["@l"] == "Fatal")'
+
+# Belirli bir istek yolunu içeren satırlar
+docker compose logs --no-log-prefix api | jq -R 'fromjson? // empty' \
+  | jq 'select(.RequestPath? == "/api/auth/login")'
+```
+
+`fromjson? // empty` şart: açılış/health-check gibi bazı satırlar JSON değil
+düz metin gelebilir, `jq` bunlarda direkt `fromjson` ile patlar.
+
+**Yerelde** (`npm run stack:docker`, yığın `Development` ortamında koşar)
+konsol çıktısı okunabilir düz metindir, JSON değildir — yukarıdaki `jq`
+örnekleri üretim örtüsü (`docker-compose.prod.yml`) altında anlamlıdır.
+
+**Denetim izi (kim ne yaptı) bu günlüklerde YOKTUR ve aranmamalı.** Yönetici
+eylemleri (hesap silme, rol verme/alma), kimlik olayları (parola sıfırlama,
+kilitlenme) `AuditEvents` tablosunda kalıcı olarak durur ve `/yonetim/gunluk`
+panelinden (`GET /api/admin/audit`) filtrelenip okunur — konteyner yeniden
+başlasa da kaybolmaz. Konteyner logları geçicidir ve yukarıdaki `logging:`
+sınırına takılınca en eskisi silinir; audit tablosu ayrıca `AuditRetentionDays`
+(`.env` → `AUDIT_RETENTION_DAYS`, varsayılan 365) ile kendi saklama süresini
+uygular.
 
 ---
 

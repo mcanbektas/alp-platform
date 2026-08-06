@@ -14,11 +14,15 @@ name: alp-pcb-toolkit
 # Docker'ın varsayılan json-file sürücüsü SINIRSIZDIR: log dosyası konteyner
 # yaşadıkça büyür ve küçük bir diskte en olası ilk kesinti buydu. Her servis
 # aynı sınırı alır — kayıt kaybolmaz, disk dolmaz.
+#
+# `local` sürücüsü json-file'ın yerine geçer: aynı tavanı uygular ama diskte
+# sıkıştırır ve `docker logs`/`docker compose logs` ile aynı şekilde okunur —
+# tek fark diskte kapladığı yer. ~100 MB/servis tavan (20m × 5 dosya).
 x-logging: &default-logging
-  driver: json-file
+  driver: local
   options:
-    max-size: "10m"
-    max-file: "3"
+    max-size: "20m"
+    max-file: "5"
 
 services:
   postgres:
@@ -72,11 +76,19 @@ services:
       Jwt__Issuer: ${JWT_ISSUER:-alp-pcb-toolkit}
       Jwt__Audience: ${JWT_AUDIENCE:-alp-pcb-toolkit}
       App__FrontendBaseUrl: ${FRONTEND_BASE_URL:-http://localhost:8080}
+      # Yönetim paneline girebilecek hesapların e-postaları (virgülle ayrılır).
+      # Yetkinin TEK kaynağı budur: panelden ya da kayıttan admin olunamaz.
+      # Değiştirdikten sonra api yeniden başlatılır — eşitleme açılışta koşar.
+      App__AdminEmails: ${ADMIN_EMAILS:-}
       # TLS ters vekilde biter; konteynerdeki uygulama yalnızca HTTP dinler.
       App__HttpsRedirection: "false"
       # nginx'in bulunduğu ağ tanıtılmazsa X-Forwarded-For yok sayılır ve
       # bütün istekler tek IP'ye düşer (hız sınırı tek kova olur).
       App__KnownProxyNetworks__0: ${PROXY_NETWORK:-172.28.0.0/16}
+      # Denetim izinin (AuditEvents) en çok saklanacağı gün sayısı —
+      # AuditCleanupService bu sınırdan eski kaydı periyodik siler. Gizlilik
+      # ve KVKK metninde beyan edilen süreyle AYNI kalmalı.
+      App__AuditRetentionDays: ${AUDIT_RETENTION_DAYS:-365}
       Database__MigrateOnStartup: "true"
       # Üretilen rapor için depolama ayarı yoktur: belge diske yazılmaz, "tekrar
       # indir" kaydedilmiş hesaplardan yeniden üretir.
