@@ -1,10 +1,12 @@
 using Alp.Api.Common;
 using Alp.Api.Http;
+using Alp.Api.Logging;
 using Alp.Data;
 using Alp.Domain;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Serilog.Events;
 
 namespace Alp.Api.Auth;
 
@@ -23,6 +25,11 @@ public static class AdminEndpoints
     // yazan bir istek bütün kullanıcı tablosunu tek yanıtta dışarı verirdi.
     private const int DefaultPageSize = 25;
     private const int MaxPageSize = 100;
+
+    // Operasyonel log ekranının varsayılan pencere boyutu. Tavan yoktur —
+    // ListLogs'ta gerçek tavan LogBufferSink.Capacity'den okunur, tampon
+    // kapasitesi App:LogBufferSize ile değişebildiği için burada sabitlenmez.
+    private const int DefaultLogTake = 200;
 
     public static void MapAdminEndpoints(this IEndpointRouteBuilder app)
     {
@@ -43,6 +50,7 @@ public static class AdminEndpoints
         admin.MapPost("/users/{id}/unlock", UnlockUser)
             .RequireRateLimiting("writes");
         admin.MapGet("/audit", ListAudit);
+        admin.MapGet("/logs", ListLogs);
     }
 
     internal static async Task<IResult> ListUsers(
@@ -370,6 +378,57 @@ public static class AdminEndpoints
             .ToListAsync();
 
         return Results.Ok(new AuditPage(items, total, page, pageSize));
+    }
+
+    // Operasyonel log listesi — bellek içi halka tampon (docs/brifler/
+    // 12-loglama-ekrani.md §3-4). Denetim iziyle (ListAudit) KARIŞTIRILMAZ:
+    // burası kalıcı değildir, yeniden başlatmada uçar; "şu an ne oluyor"
+    // sorusuna bakar, "kim ne yaptı" sorusuna değil.
+    internal static async Task<IResult> ListLogs(
+        LogBufferSink sink,
+        UserManager<ApplicationUser> userManager,
+        HttpContext http,
+        [FromQuery] string? level = null,
+        [FromQuery] string? q = null,
+        [FromQuery] int take = DefaultLogTake)
+    {
+        var (_, error) = await RequireAdmin(userManager, http);
+        if (error is not null) return error;
+
+        take = take < 1 ? DefaultLogTake : Math.Min(take, sink.Capacity);
+
+        IEnumerable<LogBufferEntry> items = sink.Snapshot();
+
+        // Tampon zaten Information ve üstünü tutar (LogBufferSink.Emit); bu
+        // süzme yalnız Warning/Error eşiğini KULLANICI isteğine göre daraltır.
+        if (level is "warning")
+        {
+            items = items.Where(e => Enum.Parse<LogEventLevel>(e.Level) >= LogEventLevel.Warning);
+        }
+        else if (level is "error")
+        {
+            items = items.Where(e => Enum.Parse<LogEventLevel>(e.Level) >= LogEventLevel.Error);
+        }
+
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            // Denetim izi/kullanıcı aramasındaki Türkçe katlama BİLEREK yok:
+            // operasyonel mesajlar ve kaynak adları zaten İngilizce/teknik.
+            var needle = q.Trim();
+            items = items.Where(e =>
+                e.Message.Contains(needle, StringComparison.OrdinalIgnoreCase)
+                || (e.SourceContext?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false)
+                || (e.RequestPath?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
+        var rows = items
+            .OrderByDescending(e => e.OccurredAt)
+            .Take(take)
+            .Select(e => new LogEntryRow(
+                e.OccurredAt, e.Level, e.Message, e.Exception, e.SourceContext, e.RequestPath, e.UserId))
+            .ToList();
+
+        return Results.Ok(new LogPage(rows, sink.Capacity));
     }
 
     // Küçük harfli girdideki Türkçe harfleri ASCII karşılığına indirir.

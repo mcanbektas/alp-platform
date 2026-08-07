@@ -88,6 +88,23 @@ public record AuditEventRow(
 
 public record AuditPage(IReadOnlyList<AuditEventRow> Items, int Total, int Page, int PageSize);
 
+// Operasyonel log satırı — panel görünümü (docs/brifler/12-loglama-ekrani.md
+// §3-4). Bellek içi halka tampondan gelir, denetim izinin AKSİNE kalıcı
+// DEĞİLDİR — yeniden başlatmada uçar. `Level` ham tutulur (Information/
+// Warning/Error/Fatal): teknik terimdir, çevrilmez.
+public record LogEntryRow(
+    DateTimeOffset OccurredAt,
+    string Level,
+    string Message,
+    string? Exception,
+    string? SourceContext,
+    string? RequestPath,
+    string? UserId);
+
+// `Capacity` panelin "son N kaydın penceresi" notunu bununla basması için —
+// toplam sayı yok çünkü tampon kayan pencere, sayfalama kavramı taşımaz.
+public record LogPage(IReadOnlyList<LogEntryRow> Items, int Capacity);
+
 // Verilmeyen alan DEĞİŞMEZ. `Company` boş dize olarak GÖNDERİLMİŞSE alan
 // temizlenir (null'a döner) — proje güncellemesindeki kuralın aynısı.
 // `DisplayName` gönderilmişse trim sonrası boş olamaz: rapordaki "Hazırlayan"

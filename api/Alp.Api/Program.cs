@@ -2,6 +2,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using Alp.Api.Auth;
 using Alp.Api.Common;
+using Alp.Api.Logging;
 using Alp.Api.Projects;
 using Alp.Api.Reports;
 using Alp.Data;
@@ -29,11 +30,20 @@ try
     var builder = WebApplication.CreateBuilder(args);
 
     builder.Services.AddOpenApi();
+
+    // Operasyonel log ekranının kaynağı (docs/brifler/12-loglama-ekrani.md).
+    // stdout-tek-hedef kararını (docs/loglama-karari.md §3) değiştirmez —
+    // aşağıdaki WriteTo.Sink stdout'un YANINA bir kopya ekler. Kapasite
+    // App:LogBufferSize (varsayılan 500).
+    builder.Services.AddSingleton(_ =>
+        new LogBufferSink(builder.Configuration.GetValue("App:LogBufferSize", 500)));
+
     builder.Services.AddSerilog((services, cfg) =>
     {
         cfg.ReadFrom.Configuration(builder.Configuration)
             .ReadFrom.Services(services)
-            .Enrich.FromLogContext();
+            .Enrich.FromLogContext()
+            .WriteTo.Sink(services.GetRequiredService<LogBufferSink>());
 
         // Serilog.Sinks.Console 6.1.1'deki formatter parametresi null kabul
         // etmiyor (ArgumentNullException, açılışta ölçüldü) — dev/prod ayrımı
@@ -533,6 +543,11 @@ try
         opt.GetLevel = (http, elapsed, ex) =>
             ex is not null || http.Response.StatusCode >= 500 ? LogEventLevel.Error
             : http.Request.Path.StartsWithSegments("/api/health") ? LogEventLevel.Verbose
+            // Panel açıkken her yenileme isteği kendi tamamlanma satırını
+            // üretir ve LogBufferSink'e düşer — süzülmezse panel kendi
+            // okunma kayıtlarıyla dolar. 5xx/istisna istisnası yukarıda
+            // önce kontrol edildiği için bozuk uç yine görünür kalır.
+            : http.Request.Path.StartsWithSegments("/api/admin/logs") ? LogEventLevel.Verbose
             : LogEventLevel.Information;
 
         opt.EnrichDiagnosticContext = (diag, http) =>
