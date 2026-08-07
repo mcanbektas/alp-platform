@@ -19,6 +19,7 @@ using Microsoft.IdentityModel.Tokens;
 using QuestPDF.Infrastructure;
 using Serilog;
 using Serilog.Events;
+using Serilog.Filters;
 using Serilog.Formatting.Compact;
 
 Log.Logger = new LoggerConfiguration()
@@ -43,7 +44,17 @@ try
         cfg.ReadFrom.Configuration(builder.Configuration)
             .ReadFrom.Services(services)
             .Enrich.FromLogContext()
-            .WriteTo.Sink(services.GetRequiredService<LogBufferSink>());
+            // ConsoleEmailSender yalnız DEV'de e-posta gövdesini — doğrulama
+            // ve parola sıfırlama TOKEN'ı dahil — stdout'a yazar, bilerek
+            // (IEmailSender.cs üstündeki yorum: geliştirici konsoldan
+            // okuyabilsin diye). O satır Console() sink'inde (aşağıda)
+            // AYNEN kalır ama LogBufferSink'e HİÇ gitmez: web admin girişi
+            // terminal/SSH erişiminden daha geniş bir yüzey, token'ı oraya
+            // taşımak bu sınıfın var olma sebebini (token'ın SADECE sunucuya
+            // erişimi olana görünmesi) deler.
+            .WriteTo.Logger(lc => lc
+                .Filter.ByExcluding(Matching.FromSource<Alp.Api.Auth.ConsoleEmailSender>())
+                .WriteTo.Sink(services.GetRequiredService<LogBufferSink>()));
 
         // Serilog.Sinks.Console 6.1.1'deki formatter parametresi null kabul
         // etmiyor (ArgumentNullException, açılışta ölçüldü) — dev/prod ayrımı

@@ -5,7 +5,9 @@ using Alp.Domain;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
+using Serilog;
 using Serilog.Events;
+using Serilog.Filters;
 using Serilog.Parsing;
 
 namespace Alp.Api.Tests;
@@ -91,6 +93,35 @@ public class LogBufferSinkTests
         Assert.Equal("Alp.Api.Auth.AuditLog", entry.SourceContext);
         Assert.Equal("/api/admin/users", entry.RequestPath);
         Assert.Equal("u1", entry.UserId);
+    }
+
+    // Regresyon (bulgu, 2026-08-07): ConsoleEmailSender dev'de e-posta
+    // gövdesini — doğrulama/parola sıfırlama TOKEN'ı dahil — stdout'a yazar
+    // (IEmailSender.cs üstündeki gerekçe: geliştirici konsoldan okuyabilsin
+    // diye). LogBufferSink eklenince bu satır ilk turda panelde de göründü —
+    // web admin girişi terminal erişiminden daha geniş bir yüzey, token'ı
+    // oraya taşımak bu sınıfın var olma sebebini deler. Program.cs'teki
+    // WriteTo.Logger(...).Filter.ByExcluding(Matching.FromSource<...>())
+    // zincirinin AYNISI burada kurulup doğrulanır — stdout'ta kalır, tampona
+    // hiç girmez.
+    [Fact]
+    public void console_email_sender_kaynakli_satirlar_tampona_hic_girmez()
+    {
+        var buffer = new LogBufferSink(capacity: 10);
+        using var logger = new LoggerConfiguration()
+            .WriteTo.Logger(lc => lc
+                .Filter.ByExcluding(Matching.FromSource<ConsoleEmailSender>())
+                .WriteTo.Sink(buffer))
+            .CreateLogger();
+
+        logger.ForContext<ConsoleEmailSender>().Information(
+            "[dev e-posta] Kime: {To} — Konu: {Subject}\n{Body}", "x@ornek.test", "Konu", "gizli-token");
+        logger.ForContext<AuditLog>().Information("normal satir");
+
+        var snapshot = buffer.Snapshot();
+        var row = Assert.Single(snapshot);
+        Assert.Equal("normal satir", row.Message);
+        Assert.DoesNotContain(snapshot, e => e.Message.Contains("gizli-token"));
     }
 
     [Fact]
