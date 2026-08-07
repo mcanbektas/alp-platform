@@ -13,10 +13,17 @@ internal static class AuditEventCodes
     public const string AuthPasswordChanged = "auth.password-changed";
     public const string AuthPasswordReset = "auth.password-reset";
     public const string AuthLockout = "auth.lockout";
+    // Kilidin KULLANICI tarafından temizlenmesi: postadaki bağlantı
+    // (POST /api/auth/unlock) ya da parola sıfırlama. Yönetim panelinden
+    // açmanın kodu AYRI (`AdminLockoutCleared`) ve öyle kalmalı — denetim
+    // panelinde "kim açtı" sorusunun cevabı olay kodundan okunur, detay
+    // alanından değil.
+    public const string AuthLockoutCleared = "auth.lockout-cleared";
     public const string AdminUserDeleted = "admin.user-deleted";
     public const string AdminRoleGranted = "admin.role-granted";
     public const string AdminRoleRevoked = "admin.role-revoked";
     public const string AdminPlanChanged = "admin.plan-changed";
+    public const string AdminLockoutCleared = "admin.lockout-cleared";
 }
 
 // Denetim izinin TEK yazım noktası — uçlar elle `db.AuditEvents.Add` yazmaz.

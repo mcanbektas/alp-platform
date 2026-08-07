@@ -8,7 +8,12 @@ namespace Alp.Api.Auth;
 public record RegisterRequest(string Email, string Password, string DisplayName, string? Lang = null);
 // RememberMe isteğe bağlıdır ve varsayılanı false: alan gönderilmezse oturum
 // tarayıcı kapanınca biter. Eski istemci gövdesi bu yüzden kırılmaz.
-public record LoginRequest(string Email, string Password, bool RememberMe = false);
+//
+// `Lang` giriş isteğinde de var, çünkü giriş de posta ÜRETEBİLİR: eşiği aşan
+// deneme hesabı kilitler ve kullanıcıya iki bağlantılı bir bilgilendirme
+// gider (AuthEndpoints.Login). Postanın dili başka hiçbir kaynaktan
+// okunamaz — kayıt/parola sıfırlama ile aynı kural (docs/eposta-dili-karari.md §1).
+public record LoginRequest(string Email, string Password, bool RememberMe = false, string? Lang = null);
 public record ForgotPasswordRequest(string Email, string? Lang = null);
 // Doğrulama postası kaybolduğunda kendi kendine kurtarma. Bu uç olmadan
 // akış çıkmaz sokaktı: RequireConfirmedEmail açıkken giriş yapılamıyor,
@@ -31,6 +36,12 @@ public record AdminDeleteUserRequest(string CurrentPassword);
 // "free" ya da "pro" olabilir, uç doğrular.
 public record AdminChangePlanRequest(string Plan);
 public record ResetPasswordRequest(string Email, string Token, string NewPassword);
+// Kilitlenme postasındaki "kilidi aç" bağlantısı. Oturum İSTEMEZ — kullanıcı
+// zaten giremiyor, isteyebileceğimiz tek kanıt postaya giden token'dır.
+// Kimlik `Email` ile değil `UserId` ile taşınır (ConfirmEmail'deki kalıp):
+// bağlantı e-posta adresini URL'de gezdirmesin, posta iletildiğinde ya da
+// tarayıcı geçmişinden okunduğunda adres açığa çıkmasın.
+public record UnlockRequest(string UserId, string Token);
 
 public record LoginResponse(string AccessToken, DateTimeOffset ExpiresAt);
 // E-posta yanıtta var ama DEĞİŞTİRİLEMEZ: `UpdateMeRequest` böyle bir alan

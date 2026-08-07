@@ -1,3 +1,4 @@
+using System.Globalization;
 using Alp.Api.Common;
 using Alp.Api.Http;
 using Alp.Data;
@@ -36,6 +37,12 @@ public static class AuthEndpoints
         group.MapPost("/forgot-password", ForgotPassword).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapPost("/resend-confirmation", ResendConfirmation).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapPost("/reset-password", ResetPassword).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
+        // Kilitlenme postasındaki bağlantının ucu. Oturum İSTEMEZ (kullanıcı
+        // zaten giremiyor) ve tam da bu yüzden "auth" kovasında durur: login /
+        // register ile AYNI IP kotasını paylaşması bilinçlidir — token'ı kaba
+        // kuvvetle denemek, aynı kovadan yanlış parola denemekle aynı bütçeye
+        // düşsün.
+        group.MapPost("/unlock", Unlock).RequireRateLimiting("auth").LimitBodySize(AuthBodyLimitBytes);
         group.MapGet("/confirm-email", ConfirmEmail).RequireRateLimiting("auth");
 
         // Profil uçları oturum grubunun dışında, kendi kökünde: `/api/auth/*`
@@ -187,6 +194,8 @@ public static class AuthEndpoints
         ITokenService tokenService,
         AppDbContext db,
         AuditLog auditLog,
+        IEmailSender emailSender,
+        IConfiguration config,
         HttpContext http,
         IWebHostEnvironment env)
     {
@@ -233,6 +242,8 @@ public static class AuthEndpoints
                     await auditLog.WriteAsync(
                         AuditEventCodes.AuthLockout, actor: null, target: user, http,
                         new { failedCount = userManager.Options.Lockout.MaxFailedAccessAttempts });
+
+                    await SendLockoutMail(user, userManager, emailSender, config, AuthEmailText.Normalize(req.Lang));
                 }
             }
             return Results.Json(new ApiError("INVALID_CREDENTIALS"), statusCode: StatusCodes.Status401Unauthorized);
@@ -252,6 +263,134 @@ public static class AuthEndpoints
 
         return await IssueSession(user, tokenService, db, http, env, req.RememberMe);
     }
+
+    // Kilitlenme anında giden bilgilendirme. İKİ bağlantı taşır, çünkü kilit
+    // iki farklı sebeple oluşur ve doğru cevapları farklıdır:
+    //   - Denemeler kullanıcının kendisiyse parolayı değiştirmek gereksizdir,
+    //     kilidi açmak yeter → /kilit-ac.
+    //   - Denemeler bir yabancıysa kilidi açmak yetmez, parola da değişmeli
+    //     → var olan parola sıfırlama sayfası (yeni bir uç açılmadı).
+    //
+    // Gönderim best-effort'tur: IEmailSender'ın kendisi hatayı yutar
+    // (SmtpEmailSender), yani posta gitmese de giriş yanıtı değişmez — 401
+    // her koşulda aynı kalır ve numaralandırma savunması bozulmaz.
+    private static async Task SendLockoutMail(
+        ApplicationUser user,
+        UserManager<ApplicationUser> userManager,
+        IEmailSender emailSender,
+        IConfiguration config,
+        string lang)
+    {
+        var baseUrl = FrontendBaseUrl(config);
+
+        // Genel amaçlı token sağlayıcısı + KENDİNE ÖZGÜ purpose — e-posta
+        // doğrulama ve parola sıfırlamanın zaten yaptığı şey. Yeni bir sağlayıcı
+        // kaydı gerekmez; purpose'un tekliği token'ları birbirinden ayırır.
+        var unlockToken = await userManager.GenerateUserTokenAsync(
+            user, TokenOptions.DefaultProvider, UnlockPurpose(user.LockoutEnd));
+        var unlockLink = $"{baseUrl}{AuthEmailText.UnlockAccountPath(lang)}"
+            + $"?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(unlockToken)}";
+
+        // ForgotPassword ile AYNI mekanizma ve AYNI sayfa — ikinci bir sıfırlama
+        // yüzeyi açılırsa biri düzeltilip öteki unutulur.
+        var resetToken = await userManager.GeneratePasswordResetTokenAsync(user);
+        var resetLink = $"{baseUrl}{AuthEmailText.ResetPasswordPath(lang)}"
+            + $"?email={Uri.EscapeDataString(user.Email!)}&token={Uri.EscapeDataString(resetToken)}";
+
+        await emailSender.SendAsync(user.Email!,
+            AuthEmailText.AccountLockedSubject(lang),
+            AuthEmailText.AccountLockedBody(
+                lang,
+                userManager.Options.Lockout.MaxFailedAccessAttempts,
+                (int)userManager.Options.Lockout.DefaultLockoutTimeSpan.TotalMinutes,
+                unlockLink,
+                resetLink));
+    }
+
+    // Kilit açma token'ının `purpose` dizesi — üretim (SendLockoutMail) ve
+    // doğrulama (Unlock) TEK bu fonksiyondan geçer.
+    //
+    // `LockoutEnd` purpose'a GÖMÜLÜR ve token'ı böylece o KİLİT DÖNGÜSÜNE
+    // bağlar: kilit doğal süreyle, yönetici eliyle ya da bu bağlantıyla açılıp
+    // hesap YENİDEN kilitlenirse `LockoutEnd` yeni bir değer alır, eski
+    // token'ın purpose'u artık tutmaz ve doğrulama reddeder. Tekrar oynatma
+    // (replay) buradan kapanır — token'ın kendi ömrü (varsayılan 1 gün) tek
+    // başına bunu vermez, çünkü aynı gün içindeki ikinci kilidi de açardı.
+    // Başarılı açmadan sonra `LockoutEnd` null olur ve purpose "none"a döner:
+    // aynı token ikinci kez çalışmaz.
+    //
+    // Zaman damgası MİLİSANİYE olarak gömülür, `:O` (100 ns çözünürlük) ile
+    // DEĞİL. Gerekçe ölçülebilir: PostgreSQL `timestamptz` MİKROSANİYE tutar,
+    // .NET tick'i 100 ns'dir — `AccessFailedAsync`in bellekte ürettiği değerin
+    // son basamağı veritabanına yazılırken kırpılır ve doğrulama anında geri
+    // okunan damga, postayı üreten damgayla ARTIK EŞLEŞMEZ. Testlerdeki SQLite
+    // DateTimeOffset'i 7 basamaklı metin olarak sakladığı için bu ayrım orada
+    // hiç görünmez: üretimde her kilit açma bağlantısı sessizce çalışmazdı.
+    // Milisaniye hem iki sağlayıcıda da tam yuvarlanır hem de iki ayrı kilit
+    // döngüsünü ayırmaya fazlasıyla yeter.
+    private static string UnlockPurpose(DateTimeOffset? lockoutEnd) =>
+        "unlock:" + (lockoutEnd is null
+            ? "none"
+            : lockoutEnd.Value.ToUnixTimeMilliseconds().ToString(CultureInfo.InvariantCulture));
+
+    // Kilitlenme postasındaki "kilidi aç" bağlantısının ucu. Parolayı
+    // DEĞİŞTİRMEZ, oturum AÇMAZ: yalnızca kilidi kaldırır, kullanıcı ardından
+    // normal giriş yapar.
+    //
+    // Hata şekli tektir ve Login'in numaralandırma savunmasıyla aynı ruhtadır:
+    // eksik alan, olmayan kullanıcı ve geçersiz token AYNI `INVALID_TOKEN`
+    // 400'ünü verir. Ayrıştırılsalardı bu uç, oturumsuz ve hız sınırı dışında
+    // kalan bir "bu kimlik var mı" kahini olurdu — ConfirmEmail de aynı
+    // gerekçeyle tek koda düşer.
+    internal static async Task<IResult> Unlock(
+        UnlockRequest req,
+        UserManager<ApplicationUser> userManager,
+        AuditLog auditLog,
+        HttpContext http)
+    {
+        if (string.IsNullOrWhiteSpace(req.UserId) || string.IsNullOrWhiteSpace(req.Token))
+        {
+            return Results.BadRequest(new ApiError("INVALID_TOKEN"));
+        }
+
+        var user = await userManager.FindByIdAsync(req.UserId);
+        if (user is null) return Results.BadRequest(new ApiError("INVALID_TOKEN"));
+
+        // Purpose O ANKİ LockoutEnd'den kurulur — postadaki token'ın gömülü
+        // damgasıyla eşleşmesi şart. Kilit değiştiyse eşleşmez.
+        var previousLockoutEnd = user.LockoutEnd;
+        var valid = await userManager.VerifyUserTokenAsync(
+            user, TokenOptions.DefaultProvider, UnlockPurpose(previousLockoutEnd), req.Token);
+        if (!valid) return Results.BadRequest(new ApiError("INVALID_TOKEN"));
+
+        var cleared = await userManager.SetLockoutEndDateAsync(user, null);
+        if (!cleared.Succeeded)
+        {
+            return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes = cleared.Errors.Select(e => e.Code) }));
+        }
+
+        // Sayaç AYRICA sıfırlanır — AdminEndpoints.UnlockUser'daki gerekçenin
+        // aynısı: Identity'nin eşik anında sayacı sıfırlaması iç bir yan
+        // etkidir, sözleşme değil. Sayaç dolu kalırsa kilit açıldıktan sonra
+        // TEK bir yanlış parola hesabı yeniden kilitler ve kullanıcı "açtım"
+        // dediği hâlde yine dışarıda kalır.
+        await userManager.ResetAccessFailedCountAsync(user);
+
+        // `actor: null` — istek kimlik doğrulamalı değil; kanıt yalnızca
+        // postadaki token. `target` kilidi açılan hesap: `admin.lockout-cleared`
+        // ile aynı yerde durur, panel iki kodu tek şablonla okuyabilsin.
+        // `via` iki kullanıcı rotasını (bağlantı / parola sıfırlama) üçüncü bir
+        // olay kodu açmadan ayırır.
+        await auditLog.WriteAsync(
+            AuditEventCodes.AuthLockoutCleared, actor: null, target: user, http,
+            new { previousLockoutEnd, via = UnlockViaLink });
+
+        return Results.NoContent();
+    }
+
+    // Denetim izi detayındaki `via` değerleri — yapısal ve dilsiz (brif 11 §3).
+    internal const string UnlockViaLink = "unlock-link";
+    internal const string UnlockViaPasswordReset = "password-reset";
 
     // `internal`: test durum makinesini (rotasyon, yarış penceresi, zincir
     // iptali) doğrudan çağırarak sınar — GetProject'teki kalıpla aynı.
@@ -410,7 +549,8 @@ public static class AuthEndpoints
         ResetPasswordRequest req,
         UserManager<ApplicationUser> userManager,
         AppDbContext db,
-        AuditLog auditLog)
+        AuditLog auditLog,
+        HttpContext http)
     {
         var user = await userManager.FindByEmailAsync(req.Email);
         if (user is null)
@@ -435,6 +575,31 @@ public static class AuthEndpoints
             .ExecuteUpdateAsync(setters => setters.SetProperty(t => t.RevokedAt, now));
 
         await auditLog.WriteAsync(AuditEventCodes.AuthPasswordReset, actor: user, target: null);
+
+        // Sıfırlama AYRICA aktif bir kilidi de temizler. Bu olmadan akış çıkmaz
+        // sokaktı: kilitlenme postası "sen değilsen parolanı sıfırla" diyor ama
+        // sıfırlama kilide dokunmasaydı kullanıcı yeni parolasıyla da giremez,
+        // kilidin dolmasını beklerdi — hem de tam saldırı şüphesinin olduğu anda.
+        // Sıfırlama kilit açmanın kendisinden GÜÇLÜ bir kanıttır (aynı posta
+        // kutusu + parola değişimi), yani ayrı bir doğrulama gerekmez.
+        //
+        // AYRI bir denetim satırı yazılır, `auth.password-reset`e bırakılmaz:
+        // "bu sıfırlama aktif bir kilidi de temizledi" güvenlik incelemesi
+        // açısından rutin bir parola değişiminden farklı bir sinyaldir, ve
+        // kilidin nasıl açıldığı sorusu tek bir olay kodundan (kim: admin mi
+        // kullanıcı mı) okunabilmelidir — `admin.lockout-cleared` ile birlikte.
+        // Yalnız GERÇEKTEN kilitliyken yazılır: kilitsiz sıfırlamada hiçbir şey
+        // değişmediği için iz de bırakılmaz (AdminEndpoints.UnlockUser ve
+        // ChangePlan'daki "değer değişmediyse iz yok" kuralı).
+        if (userManager.SupportsUserLockout && await userManager.IsLockedOutAsync(user))
+        {
+            var previousLockoutEnd = user.LockoutEnd;
+            await userManager.SetLockoutEndDateAsync(user, null);
+            await userManager.ResetAccessFailedCountAsync(user);
+            await auditLog.WriteAsync(
+                AuditEventCodes.AuthLockoutCleared, actor: null, target: user, http,
+                new { previousLockoutEnd, via = UnlockViaPasswordReset });
+        }
 
         return Results.Ok();
     }

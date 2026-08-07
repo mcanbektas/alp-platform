@@ -38,6 +38,10 @@ public static class AdminEndpoints
         // ile aynı, "password" kovasına girmiyor çünkü kimlik doğrulaması yok.
         admin.MapPost("/users/{id}/plan", ChangePlan)
             .RequireRateLimiting("writes").LimitBodySize(AdminBodyLimitBytes);
+        // Gövdesiz istek (bkz. UnlockUser yorumu) — DeleteProject/DeleteCalculation
+        // gibi gövdesiz uçlarla aynı gerekçeyle `LimitBodySize` verilmez.
+        admin.MapPost("/users/{id}/unlock", UnlockUser)
+            .RequireRateLimiting("writes");
         admin.MapGet("/audit", ListAudit);
     }
 
@@ -243,6 +247,64 @@ public static class AdminEndpoints
         await auditLog.WriteAsync(
             AuditEventCodes.AdminPlanChanged, admin, target, http,
             new { fromPlan, toPlan = req.Plan });
+
+        return Results.NoContent();
+    }
+
+    // Yanlış kilitlenmeyi elle düzeltme (AuthEndpoints.Login → AccessFailedAsync
+    // eşiği aşınca kilitliyor, bkz. oradaki yorum). ChangePlan ile AYNI risk
+    // sınıfı: parola İSTEMEZ, geri alınabilir, düşük riskli — silmedeki
+    // sürtünmeye gerek yok, admin oturumu yeterli.
+    internal static async Task<IResult> UnlockUser(
+        string id,
+        UserManager<ApplicationUser> userManager,
+        AuditLog auditLog,
+        HttpContext http)
+    {
+        var (admin, error) = await RequireAdmin(userManager, http);
+        if (error is not null) return error;
+
+        var target = await userManager.FindByIdAsync(id);
+        if (target is null) return Results.NotFound(new ApiError("NOT_FOUND"));
+
+        // Zaten kilitli DEĞİLSE (LockoutEnd null ya da geçmişte) no-op: 204
+        // döner ama audit YAZILMAZ — ChangePlan'daki "değer zaten aynıysa iz
+        // bırakma" kararıyla aynı gerekçe, hiçbir şey değişmedi. Ölçüt Login'in
+        // kendi kilit kontrolüyle BİREBİR aynı (`IsLockedOutAsync`), panelin
+        // rozet koşuluyla (`lockoutEnd > şu an`) da eşdeğer.
+        if (!userManager.SupportsUserLockout || !await userManager.IsLockedOutAsync(target))
+        {
+            return Results.NoContent();
+        }
+
+        var previousLockoutEnd = target.LockoutEnd;
+
+        var unlocked = await userManager.SetLockoutEndDateAsync(target, null);
+        if (!unlocked.Succeeded)
+        {
+            return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes = unlocked.Errors.Select(e => e.Code) }));
+        }
+
+        // AccessFailedCount'u AYRICA sıfırlar. Identity normalde bunu zaten
+        // AccessFailedAsync İÇİNDE yapar — eşik aşılıp kilit oluştuğu anda
+        // sayaç kendi içinde 0'a döner (AuthEndpoints.Login → Login yorumu,
+        // `store.ResetAccessFailedCountAsync`), yani standart yoldan kilitlenmiş
+        // bir hesabın sayacı buraya gelmeden önce teorik olarak zaten sıfırdır.
+        // Yine de burada AYRICA çağrılır: bu davranış Identity'nin iç akışına
+        // bağlı bir yan etkidir, sözleşme değil — LockoutEnd'i doğrudan
+        // veritabanından elle set eden bir yol (script, göç, ileride başka bir
+        // uç) sayacı sıfırlamadan bırakabilir. O durumda kilidi açtıktan hemen
+        // sonra TEK bir yanlış parola denemesi hesabı yeniden kilitlerdi — admin
+        // "açtım" derken kullanıcı yine dışarıda kalırdı. Çağrı ucuz ve
+        // zaten-sıfırsa etkisiz; riski almaya değmez.
+        await userManager.ResetAccessFailedCountAsync(target);
+
+        // Best-effort (WriteAsync): kilit zaten açıldı, iz yazımı patlarsa
+        // işlemi geri almanın bedeli faydasından ağır — ChangePlan'daki
+        // gerekçenin aynısı.
+        await auditLog.WriteAsync(
+            AuditEventCodes.AdminLockoutCleared, admin, target, http,
+            new { previousLockoutEnd });
 
         return Results.NoContent();
     }

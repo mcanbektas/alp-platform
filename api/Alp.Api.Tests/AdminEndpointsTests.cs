@@ -160,6 +160,9 @@ public class AdminEndpointsTests : IDisposable
         AdminEndpoints.ChangePlan(
             targetId, new AdminChangePlanRequest(plan), Users, Audit, TestHttp.For(caller));
 
+    private Task<IResult> Unlock(ApplicationUser caller, string targetId) =>
+        AdminEndpoints.UnlockUser(targetId, Users, Audit, TestHttp.For(caller));
+
     // ---- Silme ----
 
     [Fact]
@@ -488,6 +491,130 @@ public class AdminEndpointsTests : IDisposable
     // Parola İSTENMEZ (DeleteUser'ın aksine): `AdminChangePlanRequest` hiç
     // parola alanı taşımaz, bu yüzden yanlış/boş parola senaryosu YOK — uç
     // yalnız admin oturumuna bakar.
+
+    // ---- Kilit açma ----
+
+    // Asıl iddia yalnız "LockoutEnd null oldu" değil: AccessFailedCount da
+    // sıfırlanmalı. Standart yoldan (AccessFailedAsync eşiği aşınca) kilitlenmiş
+    // bir hesapta Identity bunu zaten kendi içinde yapar — burada senaryo BİLEREK
+    // o yoldan geçmiyor, sayaç LockoutEnd'den BAĞIMSIZ elle 3'e sabitleniyor
+    // (ör. LockoutEnd'i doğrudan veritabanından set eden bir script/göç sonrası
+    // gibi). Uç bunu da sıfırlamazsa kilidi açtıktan hemen sonra tek bir yanlış
+    // parola hesabı yeniden kilitlerdi.
+    [Fact]
+    public async Task yonetici_kilitli_hesabin_kilidini_ve_basarisiz_sayacini_acar()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync("kilitli@ornek.test");
+        var until = DateTimeOffset.UtcNow.AddMinutes(5);
+        await Users.SetLockoutEndDateAsync(user, until);
+        user.AccessFailedCount = 3;
+        await Users.UpdateAsync(user);
+
+        var result = await Unlock(admin, user.Id);
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+
+        using var after = db.NewContext();
+        var row = after.Users.Single(u => u.Id == user.Id);
+        Assert.Null(row.LockoutEnd);
+        Assert.Equal(0, row.AccessFailedCount);
+
+        var audit = Assert.Single(after.AuditEvents.Where(a => a.Event == AuditEventCodes.AdminLockoutCleared));
+        Assert.Equal(admin.Id, audit.ActorUserId);
+        Assert.Equal(user.Id, audit.TargetUserId);
+        using var doc = JsonDocument.Parse(audit.DetailJson!);
+        var previous = doc.RootElement.GetProperty("previousLockoutEnd").GetDateTimeOffset();
+        Assert.True(Math.Abs((until - previous).TotalSeconds) < 1, $"beklenen {until:o}, gelen {previous:o}");
+    }
+
+    // Kilit açıldıktan sonra gerçekten giriş yapılabildiğini kanıtlar — asıl
+    // amaç bu: rozetin kaybolması tek başına yetmez, AccessFailedCount
+    // sıfırlanmazsa ilk yanlış deneme hesabı anında yeniden kilitler ve
+    // (bu testte olmasa da) doğru parolayla giriş de eşiğe göre engellenebilirdi.
+    [Fact]
+    public async Task kilit_acildiktan_sonra_dogru_parolayla_giris_yapilabilir()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync("girisyapan@ornek.test");
+        await Users.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddMinutes(5));
+        Assert.True(await Users.IsLockedOutAsync(user));
+
+        await Unlock(admin, user.Id);
+
+        Assert.False(await Users.IsLockedOutAsync(user));
+        Assert.True(await Users.CheckPasswordAsync(user, Password));
+    }
+
+    // Hesap zaten kilitli DEĞİLSE (hiç kilitlenmemiş) no-op: 204 döner ama
+    // iz YAZILMAZ — ChangePlan'daki "değer zaten aynıysa iz bırakma"
+    // kararıyla aynı gerekçe.
+    [Fact]
+    public async Task kilitli_olmayan_hesapta_no_op_ve_iz_birakmaz()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync("kilitsiz@ornek.test");
+
+        var result = await Unlock(admin, user.Id);
+
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+        using var after = db.NewContext();
+        Assert.Empty(after.AuditEvents.Where(a => a.Event == AuditEventCodes.AdminLockoutCleared));
+    }
+
+    // Kilit süresi zaten geçmişse (dolmuş ama henüz bir sonraki başarılı/
+    // başarısız girişte temizlenmemiş) de aynı no-op — `IsLockedOutAsync`
+    // Login'in kendi kontrolüyle birebir aynı ölçütü kullanır.
+    [Fact]
+    public async Task suresi_gecmis_kilitte_no_op_ve_iz_birakmaz()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync("gecmis-kilit@ornek.test");
+        await Users.SetLockoutEndDateAsync(user, DateTimeOffset.UtcNow.AddMinutes(-5));
+
+        var result = await Unlock(admin, user.Id);
+
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+        using var after = db.NewContext();
+        Assert.Empty(after.AuditEvents.Where(a => a.Event == AuditEventCodes.AdminLockoutCleared));
+    }
+
+    [Fact]
+    public async Task olmayan_hesabin_kilidi_404_doner()
+    {
+        var admin = await NewAdminAsync();
+
+        var result = await Unlock(admin, Guid.NewGuid().ToString());
+
+        Assert.Equal(StatusCodes.Status404NotFound, ResultAssert.Status(result));
+        Assert.Equal("NOT_FOUND", ResultAssert.Value<ApiError>(result).Error);
+    }
+
+    [Fact]
+    public async Task rolsuz_kullanici_kilit_acamaz()
+    {
+        var caller = await NewUserAsync("siradan-kilit@ornek.test");
+        var target = await NewUserAsync("hedef-kilit@ornek.test");
+        await Users.SetLockoutEndDateAsync(target, DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var result = await Unlock(caller, target.Id);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, ResultAssert.Status(result));
+        Assert.Equal("FORBIDDEN", ResultAssert.Value<ApiError>(result).Error);
+        Assert.True(await Users.IsLockedOutAsync(target));
+    }
+
+    [Fact]
+    public async Task kimliksiz_istek_kilit_acamaz()
+    {
+        var target = await NewUserAsync();
+
+        var result = await AdminEndpoints.UnlockUser(target.Id, Users, Audit, TestHttp.Anonymous());
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, ResultAssert.Status(result));
+    }
+
+    // Parola İSTENMEZ (DeleteUser'ın aksine): uç yalnız admin oturumuna bakar,
+    // ChangePlan'daki gerekçenin aynısı.
 
     // ---- Liste ----
 

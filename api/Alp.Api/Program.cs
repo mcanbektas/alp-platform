@@ -66,7 +66,15 @@ try
             opt.Password.RequiredLength = 10;
             opt.SignIn.RequireConfirmedEmail = true;
             opt.User.RequireUniqueEmail = true;
-            // Kilitlenme varsayılanları açık: 5 başarısız denemede 5 dk kilit.
+            // Kilitlenme eşiği ve süresi yapılandırmadan gelir
+            // (App:LockoutMaxAttempts / App:LockoutMinutes — varsayılan 3 deneme,
+            // 10 dakika). Identity'nin kendi varsayılanı 5/5'ti ve hiçbir yerde
+            // yazmıyordu; okuma ve varsayılana düşme kuralı LockoutSettings.cs'te.
+            // `builder.Configuration` bu noktada hazırdır (WebApplicationBuilder
+            // yapılandırma sağlayıcılarını kendi kurucusunda bağlar), yani değer
+            // burada okunabilir — sonradan bir IConfigureOptions'a taşımaya gerek yok.
+            opt.Lockout.MaxFailedAccessAttempts = LockoutSettings.MaxAttempts(builder.Configuration);
+            opt.Lockout.DefaultLockoutTimeSpan = LockoutSettings.Duration(builder.Configuration);
             // Login uç noktası kilit durumunu yalnızca parola doğru bilindiğinde
             // açığa çıkarır — bkz. AuthEndpoints.cs → Login.
         })

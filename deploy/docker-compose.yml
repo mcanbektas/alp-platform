@@ -89,6 +89,11 @@ services:
       # AuditCleanupService bu sınırdan eski kaydı periyodik siler. Gizlilik
       # ve KVKK metninde beyan edilen süreyle AYNI kalmalı.
       App__AuditRetentionDays: ${AUDIT_RETENTION_DAYS:-365}
+      # Hesap kilidi: kaç başarısız denemeden sonra ve kaç dakikalığına.
+      # Kilitlenme anında iki bağlantılı bir posta gider (kilidi aç / parolayı
+      # sıfırla), bu yüzden süre cömert tutulabilir — AuthEndpoints.Login.
+      App__LockoutMaxAttempts: ${LOCKOUT_MAX_ATTEMPTS:-3}
+      App__LockoutMinutes: ${LOCKOUT_MINUTES:-10}
       Database__MigrateOnStartup: "true"
       # Üretilen rapor için depolama ayarı yoktur: belge diske yazılmaz, "tekrar
       # indir" kaydedilmiş hesaplardan yeniden üretir.

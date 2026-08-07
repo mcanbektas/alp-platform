@@ -105,6 +105,12 @@ public class AuditLogTests : IDisposable
 
     private static readonly IEmailSender Mail = new NoopEmailSender();
 
+    // Login kilitlenme postasının bağlantılarını bu adresten üretir; postanın
+    // kendi içeriği AccountLockoutTests'te sınanır, burada yalnız akış lazım.
+    private static readonly IConfiguration Config = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["App:FrontendBaseUrl"] = "https://ornek.test" })
+        .Build();
+
     private static IConfiguration ConfigWithAdmins(params string[] emails) =>
         new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { [AdminSeeder.ConfigKey] = string.Join(",", emails) })
@@ -266,7 +272,7 @@ public class AuditLogTests : IDisposable
         IResult? last = null;
         for (var i = 0; i < threshold; i++)
         {
-            last = await AuthEndpoints.Login(req, Users, Tokens, Scoped, Audit, TestHttp.Anonymous(), new FakeEnv());
+            last = await AuthEndpoints.Login(req, Users, Tokens, Scoped, Audit, Mail, Config, TestHttp.Anonymous(), new FakeEnv());
         }
 
         Assert.Equal(StatusCodes.Status401Unauthorized, ResultAssert.Status(last!));
@@ -291,7 +297,7 @@ public class AuditLogTests : IDisposable
 
         for (var i = 0; i < threshold - 1; i++)
         {
-            await AuthEndpoints.Login(req, Users, Tokens, Scoped, Audit, TestHttp.Anonymous(), new FakeEnv());
+            await AuthEndpoints.Login(req, Users, Tokens, Scoped, Audit, Mail, Config, TestHttp.Anonymous(), new FakeEnv());
         }
 
         using var after = db.NewContext();
@@ -309,7 +315,7 @@ public class AuditLogTests : IDisposable
 
         for (var i = 0; i < threshold + 2; i++)
         {
-            await AuthEndpoints.Login(req, Users, Tokens, Scoped, Audit, TestHttp.Anonymous(), new FakeEnv());
+            await AuthEndpoints.Login(req, Users, Tokens, Scoped, Audit, Mail, Config, TestHttp.Anonymous(), new FakeEnv());
         }
 
         using var after = db.NewContext();
@@ -373,7 +379,8 @@ public class AuditLogTests : IDisposable
         var token = await Users.GeneratePasswordResetTokenAsync(user);
 
         var result = await AuthEndpoints.ResetPassword(
-            new ResetPasswordRequest(user.Email!, token, "Yeni-Parola-999!"), Users, Scoped, Audit);
+            new ResetPasswordRequest(user.Email!, token, "Yeni-Parola-999!"), Users, Scoped, Audit,
+            TestHttp.Anonymous());
 
         Assert.Equal(StatusCodes.Status200OK, ResultAssert.Status(result));
 
