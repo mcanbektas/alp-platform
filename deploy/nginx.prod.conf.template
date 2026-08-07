@@ -29,7 +29,8 @@ map $request_uri $uri_sorgusuz {
 
 log_format sorgusuz '$remote_addr - $remote_user [$time_local] '
                     '"$request_method $uri_sorgusuz $server_protocol" '
-                    '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+                    '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+                    'rid=$request_id';
 
 # ---- HTTP: yalnızca ACME ve yönlendirme ----
 server {
@@ -144,6 +145,12 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host  $host;
+        # İstek korelasyonu (docs/brifler/14-loglama-altyapi.md §2) — bkz.
+        # deploy/nginx.conf'taki aynı satırın gerekçesi. Bu dosya ÜRETİMİN
+        # kendisi (deploy/README.md'deki tablo: nginx.conf TLS'siz/gömülü,
+        # bu dosya üretim örtüsü) — ikisi elle senkron tutulur, review'da
+        # bu satır ilk turda yalnız nginx.conf'a girmiş, burası unutulmuştu.
+        proxy_set_header X-Request-Id      $request_id;
 
         proxy_connect_timeout 10s;
         proxy_send_timeout    120s;

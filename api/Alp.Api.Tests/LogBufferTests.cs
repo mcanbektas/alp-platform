@@ -24,13 +24,17 @@ public class LogBufferSinkTests
         string? sourceContext = null,
         string? requestPath = null,
         string? userId = null,
+        string? requestId = null,
         Exception? exception = null,
-        DateTimeOffset? at = null)
+        DateTimeOffset? at = null,
+        IEnumerable<LogEventProperty>? extraProperties = null)
     {
         var props = new List<LogEventProperty>();
         if (sourceContext is not null) props.Add(new LogEventProperty("SourceContext", new ScalarValue(sourceContext)));
         if (requestPath is not null) props.Add(new LogEventProperty("RequestPath", new ScalarValue(requestPath)));
         if (userId is not null) props.Add(new LogEventProperty("UserId", new ScalarValue(userId)));
+        if (requestId is not null) props.Add(new LogEventProperty("RequestId", new ScalarValue(requestId)));
+        if (extraProperties is not null) props.AddRange(extraProperties);
 
         return new LogEvent(at ?? DateTimeOffset.UtcNow, level, exception, Parser.Parse(message), props);
     }
@@ -65,20 +69,39 @@ public class LogBufferSinkTests
         Assert.Equal("gorunmeli", entry.Message);
     }
 
-    // Yığın izi stdout'ta zaten var; tamponda yalnız ilk satır (mesaj)
-    // tutulur, bellek satır sayısıyla şişmesin.
+    // Brif 12'nin "yalnız ilk satır" kararının F2'de (docs/brifler/
+    // 14-loglama-altyapi.md §3) BİLİNÇLİ revizyonu: karta artık tam metin
+    // gerekiyor (tam yığın izi de dahil, "Görüntüle" gerçekten detaylı
+    // olsun diye), yalnız TAVANLI — sınırsız değil, bkz. aşağıdaki kısaltma
+    // testi.
     [Fact]
-    public void istisnanin_yalniz_ilk_satiri_saklanir()
+    public void istisnanin_artik_tam_metni_saklanir()
     {
         var sink = new LogBufferSink(capacity: 10);
-        var ex = new InvalidOperationException("dış hata");
+        var ex = new InvalidOperationException("dış hata\nikinci satır");
 
         sink.Emit(MakeEvent(LogEventLevel.Error, "patladi", exception: ex));
 
         var entry = Assert.Single(sink.Snapshot());
         Assert.NotNull(entry.Exception);
-        Assert.DoesNotContain('\n', entry.Exception);
-        Assert.Contains("dış hata", entry.Exception);
+        Assert.Contains('\n', entry.Exception);
+        Assert.Contains("ikinci satır", entry.Exception);
+        Assert.DoesNotContain("kısaltıldı", entry.Exception);
+    }
+
+    [Fact]
+    public void istisna_4000_karakteri_asinca_kisaltilip_isaretlenir()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        var ex = new InvalidOperationException(new string('x', 5000));
+
+        sink.Emit(MakeEvent(LogEventLevel.Error, "patladi", exception: ex));
+
+        var entry = Assert.Single(sink.Snapshot());
+        Assert.NotNull(entry.Exception);
+        Assert.EndsWith("… (kısaltıldı)", entry.Exception);
+        // Tavan var: 4000 + işaret, sınırsız büyümüyor.
+        Assert.True(entry.Exception.Length < 4100, $"beklenenden uzun: {entry.Exception.Length}");
     }
 
     [Fact]
@@ -134,7 +157,131 @@ public class LogBufferSinkTests
         Assert.Null(entry.SourceContext);
         Assert.Null(entry.RequestPath);
         Assert.Null(entry.UserId);
+        Assert.Null(entry.RequestId);
         Assert.Null(entry.Exception);
+        Assert.Empty(entry.Properties);
+        Assert.Equal(0, entry.TruncatedPropertyCount);
+    }
+
+    // F2 — ayrıntı zenginleştirme (docs/brifler/14-loglama-altyapi.md §3).
+    // İstek-tamamlama olayının property'leri (RequestMethod/StatusCode/
+    // Elapsed/ClientIp) ZATEN üretiliyordu, sink onları atıyordu — artık
+    // tavanlı bir kopyaya giriyorlar.
+    [Fact]
+    public void bilinmeyen_ozellikler_sozluge_girer()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        sink.Emit(MakeEvent(LogEventLevel.Information, "istek tamamlandi", extraProperties:
+        [
+            new LogEventProperty("RequestMethod", new ScalarValue("GET")),
+            new LogEventProperty("StatusCode", new ScalarValue(200)),
+            new LogEventProperty("Elapsed", new ScalarValue(12.5)),
+        ]));
+
+        var entry = Assert.Single(sink.Snapshot());
+        Assert.Equal("GET", entry.Properties["RequestMethod"]);
+        Assert.Equal("200", entry.Properties["StatusCode"]);
+        Assert.Equal("12.5", entry.Properties["Elapsed"]);
+        // Tırnaksız: ScalarValue.ToString() Serilog biçimlendiricisinden
+        // geçseydi "GET" tırnaklı çıkardı — burada ham CLR değeri.
+        Assert.DoesNotContain('"', entry.Properties["RequestMethod"]);
+    }
+
+    // Zaten özel kolonu olan dört alan (SourceContext/RequestPath/UserId/
+    // RequestId) sözlüğe İKİNCİ KEZ girmez — çift gösterim olmasın.
+    [Fact]
+    public void ozel_alanlar_sozlukte_tekrar_etmez()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        sink.Emit(MakeEvent(
+            LogEventLevel.Information, "istek tamamlandi",
+            sourceContext: "Kaynak", requestPath: "/api/x", userId: "u1",
+            requestId: "0123456789abcdef0123456789abcdef"));
+
+        var entry = Assert.Single(sink.Snapshot());
+        Assert.DoesNotContain("SourceContext", entry.Properties.Keys);
+        Assert.DoesNotContain("RequestPath", entry.Properties.Keys);
+        Assert.DoesNotContain("UserId", entry.Properties.Keys);
+        Assert.DoesNotContain("RequestId", entry.Properties.Keys);
+    }
+
+    [Fact]
+    public void yirmi_dorttan_fazla_ozellik_kirpilir_sayac_dogru()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        var extra = Enumerable.Range(0, 30)
+            .Select(i => new LogEventProperty($"P{i:D2}", new ScalarValue(i)));
+
+        sink.Emit(MakeEvent(LogEventLevel.Information, "cok ozellikli", extraProperties: extra));
+
+        var entry = Assert.Single(sink.Snapshot());
+        Assert.Equal(24, entry.Properties.Count);
+        Assert.Equal(6, entry.TruncatedPropertyCount);
+    }
+
+    // Review bulgusu: `IFormattable` invariant biçimi DateTime/DateTimeOffset
+    // için varsayılan "G" — ay/gün sırası BELİRSİZ (08/07 mi 7 Ağustos mu
+    // 8 Temmuz mu). Round-trip "O" (ISO 8601) tektip ve sıralanabilir.
+    [Fact]
+    public void tarih_ozelligi_iso8601_biciminde_yazilir()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        var at = new DateTimeOffset(2026, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        sink.Emit(MakeEvent(LogEventLevel.Information, "tarihli ozellik", extraProperties:
+        [
+            new LogEventProperty("BaslangicZamani", new ScalarValue(at)),
+        ]));
+
+        var entry = Assert.Single(sink.Snapshot());
+        Assert.StartsWith("2026-03-04T05:06:07", entry.Properties["BaslangicZamani"]);
+    }
+
+    // Canlı turda yakalandı (docs/brifler/14-loglama-altyapi.md doğrulaması):
+    // `double`nin tam ("G") yazımı "Süre (ms)" gibi bir alanda 6 basamağa
+    // kadar gürültü basıyordu ("1.167333"). 3 ondalığa kırpılır, gereksiz
+    // sıfır basılmaz.
+    [Fact]
+    public void ondalik_ozellik_uc_basamaga_kirpilir()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        sink.Emit(MakeEvent(LogEventLevel.Information, "sureli olay", extraProperties:
+        [
+            new LogEventProperty("Elapsed", new ScalarValue(1.1673334444d)),
+            new LogEventProperty("TamSayiliOran", new ScalarValue(2.0d)),
+        ]));
+
+        var entry = Assert.Single(sink.Snapshot());
+        Assert.Equal("1.167", entry.Properties["Elapsed"]);
+        Assert.Equal("2", entry.Properties["TamSayiliOran"]); // gereksiz ".000" yok
+    }
+
+    [Fact]
+    public void uzun_ozellik_degeri_256_karakterde_kirpilir()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        var longValue = new string('a', 500);
+        sink.Emit(MakeEvent(LogEventLevel.Information, "uzun deger", extraProperties:
+        [
+            new LogEventProperty("Uzun", new ScalarValue(longValue)),
+        ]));
+
+        var entry = Assert.Single(sink.Snapshot());
+        var stored = entry.Properties["Uzun"];
+        Assert.EndsWith("…", stored);
+        Assert.True(stored.Length <= 257, $"beklenenden uzun: {stored.Length}");
+    }
+
+    // İstek korelasyonu (docs/brifler/14-loglama-altyapi.md §2) — kimlik
+    // `RequestIdMiddleware`nin bastığı `LogContext` özelliğinden okunur,
+    // diğer üç alanla (kaynak/yol/kullanıcı) AYNI `PropertyString` deseniyle.
+    [Fact]
+    public void istek_kimligi_ozelligi_okunur()
+    {
+        var sink = new LogBufferSink(capacity: 10);
+        sink.Emit(MakeEvent(LogEventLevel.Information, "istek tamamlandi", requestId: "0123456789abcdef0123456789abcdef"));
+
+        var entry = Assert.Single(sink.Snapshot());
+        Assert.Equal("0123456789abcdef0123456789abcdef", entry.RequestId);
     }
 }
 
@@ -274,6 +421,29 @@ public class ListLogsEndpointTests : IDisposable
         Assert.Equal("hata", row.Message);
     }
 
+    // Admin panoya yapıştırdığı istek kimliğini yapıştırınca o isteğin
+    // bütün satırlarını bulabilmesi — özelliğin asıl kullanım senaryosu
+    // (docs/brifler/14-loglama-altyapi.md §2).
+    [Fact]
+    public async Task q_istek_kimliginde_de_arar()
+    {
+        var admin = await NewAdminAsync();
+        var sink = new LogBufferSink(10);
+        var parser = new MessageTemplateParser();
+        sink.Emit(new LogEvent(
+            DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("eslesen"),
+            [new LogEventProperty("RequestId", new ScalarValue("0123456789abcdef0123456789abcdef"))]));
+        sink.Emit(new LogEvent(
+            DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("eslesmeyen"),
+            [new LogEventProperty("RequestId", new ScalarValue("ffffffffffffffffffffffffffffffff"))]));
+
+        var page = ResultAssert.Value<LogPage>(
+            await AdminEndpoints.ListLogs(sink, Users, TestHttp.For(admin), q: "0123456789abcdef"));
+
+        var row = Assert.Single(page.Items);
+        Assert.Equal("eslesen", row.Message);
+    }
+
     [Fact]
     public async Task q_mesaj_icinde_buyuk_kucuk_harf_duyarsiz_arar()
     {
@@ -287,6 +457,63 @@ public class ListLogsEndpointTests : IDisposable
 
         var row = Assert.Single(page.Items);
         Assert.Equal("Rapor üretildi", row.Message);
+    }
+
+    // Review bulgusu: `LogEntryRow` artık 10 parametreli, ardışık altısı
+    // aynı tip (`string?`) — pozisyonel bir karışıklık (ör. RequestId ile
+    // Properties'in yeri değişmesi) DERLENIR ama sessizce yanlış veri
+    // gösterir. Her alana FARKLI bir değer vererek AdminEndpoints.ListLogs'un
+    // gerçek eşleme sırasını (LogBufferEntry alanı → LogEntryRow slotu)
+    // uçtan uca doğrular — yalnız "null değil" değil, "doğru SLOTTA".
+    [Fact]
+    public async Task her_alan_dogru_slota_eslenir()
+    {
+        var admin = await NewAdminAsync();
+        var sink = new LogBufferSink(10);
+        var parser = new MessageTemplateParser();
+        var ex = new InvalidOperationException("hata-metni");
+        sink.Emit(new LogEvent(
+            DateTimeOffset.UtcNow, LogEventLevel.Error, ex, parser.Parse("mesaj-degeri"),
+            [
+                new LogEventProperty("SourceContext", new ScalarValue("kaynak-degeri")),
+                new LogEventProperty("RequestPath", new ScalarValue("/yol-degeri")),
+                new LogEventProperty("UserId", new ScalarValue("kullanici-degeri")),
+                new LogEventProperty("RequestId", new ScalarValue("istek-kimligi-degeri")),
+                new LogEventProperty("OzelAlan", new ScalarValue("ozel-deger")),
+            ]));
+
+        var page = ResultAssert.Value<LogPage>(await AdminEndpoints.ListLogs(sink, Users, TestHttp.For(admin)));
+
+        var row = Assert.Single(page.Items);
+        Assert.Equal("mesaj-degeri", row.Message);
+        Assert.Equal("Error", row.Level);
+        Assert.Equal("kaynak-degeri", row.SourceContext);
+        Assert.Equal("/yol-degeri", row.RequestPath);
+        Assert.Equal("kullanici-degeri", row.UserId);
+        Assert.Equal("istek-kimligi-degeri", row.RequestId);
+        Assert.Contains("hata-metni", row.Exception);
+        Assert.Equal("ozel-deger", row.Properties["OzelAlan"]);
+        Assert.Equal(0, row.TruncatedPropertyCount);
+    }
+
+    // F2 — özellik sözlüğü sink'ten uca kadar aynı satırda kalıyor mu
+    // (LogBufferEntry.Properties → LogEntryRow.Properties, pozisyonel
+    // record'da yer değiştirme riskine karşı bkz. review notu).
+    [Fact]
+    public async Task ozellik_sozlugu_uca_kadar_tasinir()
+    {
+        var admin = await NewAdminAsync();
+        var sink = new LogBufferSink(10);
+        var parser = new MessageTemplateParser();
+        sink.Emit(new LogEvent(
+            DateTimeOffset.UtcNow, LogEventLevel.Information, null, parser.Parse("istek tamamlandi"),
+            [new LogEventProperty("StatusCode", new ScalarValue(500))]));
+
+        var page = ResultAssert.Value<LogPage>(await AdminEndpoints.ListLogs(sink, Users, TestHttp.For(admin)));
+
+        var row = Assert.Single(page.Items);
+        Assert.Equal("500", row.Properties["StatusCode"]);
+        Assert.Equal(0, row.TruncatedPropertyCount);
     }
 
     // Sınır SUNUCUDA: ListAudit/ListUsers'la aynı gerekçe — take=100000

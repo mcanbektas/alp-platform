@@ -260,6 +260,27 @@ docker compose logs --no-log-prefix api | jq -R 'fromjson? // empty' \
   | jq 'select(.RequestPath? == "/api/auth/login")'
 ```
 
+**İstek korelasyonu** (docs/brifler/14-loglama-altyapi.md §2): nginx her isteğe
+`$request_id` üretir, `X-Request-Id` başlığıyla API'ye taşır; API kendi
+kimliğini üretmez, geleni AYNEN kullanır ve `RequestId` alanıyla (yukarıdaki
+`RequestPath` gibi, kökte) hem `/yonetim/loglar` panelinin ayrıntı kartına
+hem üretim JSON'una basar. Nginx `access.log`taki karşılığı `rid=` alanıdır
+(`log_format sorgusuz`). Bir isteğin nginx satırını ve API satırlarını yan
+yana okumak:
+
+```bash
+# Önce nginx access.log'undan kimliği bul (rid=... alanı satır sonunda) —
+# nginx'i taşıyan servisin adı `web`dir, `nginx` DEĞİL. `docker compose exec
+# web tail .../access.log` ÇALIŞMAZ: resmi nginx imajı access.log'u
+# /dev/stdout'a symlink'ler (review'da yakalandı, ilk taslak `exec`
+# kullanıyordu) — dosyadan değil, konteyner LOGUNDAN okunur.
+docker compose logs --no-log-prefix web | grep '/api/auth/login'
+
+# Sonra o kimlikle API satırlarını süz
+docker compose logs --no-log-prefix api | jq -R 'fromjson? // empty' \
+  | jq --arg rid "<yukarıda bulunan kimlik>" 'select(.RequestId? == $rid)'
+```
+
 `fromjson? // empty` şart: açılış/health-check gibi bazı satırlar JSON değil
 düz metin gelebilir, `jq` bunlarda direkt `fromjson` ile patlar.
 

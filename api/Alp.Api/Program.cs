@@ -476,6 +476,16 @@ try
             fontsPath);
     }
 
+    // İstek korelasyonu (docs/brifler/14-loglama-altyapi.md §2) —
+    // UseExceptionHandler'DAN ÖNCE kaydedilir, yani pipeline'ı SARAR: 5xx
+    // fırlatan bir istek `UseExceptionHandler`in kendi `LogError` çağrısını
+    // hâlâ bizim `LogContext` kapsamımızın İÇİNDEYKEN çalıştırır (review
+    // bulgusu — önce SONRAYDI, en değerli satır [istisna] kimliği taşımıyordu).
+    // Yanıt başlığı de aynı gerekçeyle `OnStarting`e taşındı (bkz.
+    // RequestIdMiddleware.cs) — `UseExceptionHandler` başlıkları `Clear()`
+    // ile siliyor, erken `Headers[...] =` atamasını da beraber götürürdü.
+    app.UseRequestId();
+
     if (app.Environment.IsDevelopment())
     {
         app.MapOpenApi();

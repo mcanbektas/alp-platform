@@ -418,14 +418,19 @@ public static class AdminEndpoints
             items = items.Where(e =>
                 e.Message.Contains(needle, StringComparison.OrdinalIgnoreCase)
                 || (e.SourceContext?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false)
-                || (e.RequestPath?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false));
+                || (e.RequestPath?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false)
+                // İstek kimliği tam eşleşme değil `Contains` — admin panoya
+                // yapıştırdığı kimliği kısmen de yazsa bulur (docs/brifler/
+                // 14-loglama-altyapi.md §2, asıl kullanım senaryosu budur).
+                || (e.RequestId?.Contains(needle, StringComparison.OrdinalIgnoreCase) ?? false));
         }
 
         var rows = items
             .OrderByDescending(e => e.OccurredAt)
             .Take(take)
             .Select(e => new LogEntryRow(
-                e.OccurredAt, e.Level, e.Message, e.Exception, e.SourceContext, e.RequestPath, e.UserId))
+                e.OccurredAt, e.Level, e.Message, e.Exception, e.SourceContext, e.RequestPath, e.UserId,
+                e.RequestId, e.Properties, e.TruncatedPropertyCount))
             .ToList();
 
         return Results.Ok(new LogPage(rows, sink.Capacity));

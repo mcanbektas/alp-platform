@@ -99,7 +99,10 @@ public record LogEntryRow(
     string? Exception,
     string? SourceContext,
     string? RequestPath,
-    string? UserId);
+    string? UserId,
+    string? RequestId,
+    IReadOnlyDictionary<string, string> Properties,
+    int TruncatedPropertyCount);
 
 // `Capacity` panelin "son N kaydın penceresi" notunu bununla basması için —
 // toplam sayı yok çünkü tampon kayan pencere, sayfalama kavramı taşımaz.
