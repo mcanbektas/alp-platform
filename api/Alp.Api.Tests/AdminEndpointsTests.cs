@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Alp.Api.Auth;
 using Alp.Api.Common;
 using Alp.Data;
@@ -153,6 +154,11 @@ public class AdminEndpointsTests : IDisposable
         ApplicationUser caller, string targetId, string password) =>
         AdminEndpoints.DeleteUser(
             targetId, new AdminDeleteUserRequest(password), Users, Scoped, Audit, TestHttp.For(caller));
+
+    private Task<IResult> ChangePlan(
+        ApplicationUser caller, string targetId, string plan) =>
+        AdminEndpoints.ChangePlan(
+            targetId, new AdminChangePlanRequest(plan), Users, Audit, TestHttp.For(caller));
 
     // ---- Silme ----
 
@@ -351,6 +357,138 @@ public class AdminEndpointsTests : IDisposable
         Assert.NotEqual(user.Id, again.Id);
     }
 
+    // ---- Plan ----
+
+    [Fact]
+    public async Task yonetici_plani_free_dan_pro_ya_degistirir()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync();
+        Assert.Equal("free", user.Plan);
+
+        var result = await ChangePlan(admin, user.Id, "pro");
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+
+        using var after = db.NewContext();
+        Assert.Equal("pro", after.Users.Single(u => u.Id == user.Id).Plan);
+
+        var row = Assert.Single(after.AuditEvents.Where(a => a.Event == AuditEventCodes.AdminPlanChanged));
+        Assert.Equal(admin.Id, row.ActorUserId);
+        Assert.Equal(user.Id, row.TargetUserId);
+        using var doc = JsonDocument.Parse(row.DetailJson!);
+        Assert.Equal("free", doc.RootElement.GetProperty("fromPlan").GetString());
+        Assert.Equal("pro", doc.RootElement.GetProperty("toPlan").GetString());
+    }
+
+    [Fact]
+    public async Task yonetici_plani_pro_dan_free_e_degistirir()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync();
+        await ChangePlan(admin, user.Id, "pro");
+
+        var result = await ChangePlan(admin, user.Id, "free");
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+
+        using var after = db.NewContext();
+        Assert.Equal("free", after.Users.Single(u => u.Id == user.Id).Plan);
+    }
+
+    // Değer zaten aynıysa uç yine 204 döner ama iz YAZILMAZ: hiçbir şey
+    // değişmedi, iz bırakmak gürültüden başka bir şey olmazdı.
+    [Fact]
+    public async Task ayni_plan_degeri_iz_birakmaz()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync();
+
+        var result = await ChangePlan(admin, user.Id, "free");
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+
+        using var after = db.NewContext();
+        Assert.Empty(after.AuditEvents.Where(a => a.Event == AuditEventCodes.AdminPlanChanged));
+    }
+
+    [Fact]
+    public async Task gecersiz_plan_degeri_reddedilir()
+    {
+        var admin = await NewAdminAsync();
+        var user = await NewUserAsync();
+
+        var result = await ChangePlan(admin, user.Id, "enterprise");
+
+        Assert.Equal(StatusCodes.Status400BadRequest, ResultAssert.Status(result));
+        Assert.Equal("INVALID_PLAN", ResultAssert.Value<ApiError>(result).Error);
+        using var after = db.NewContext();
+        Assert.Equal("free", after.Users.Single(u => u.Id == user.Id).Plan);
+    }
+
+    [Fact]
+    public async Task olmayan_hesabin_plani_404_doner()
+    {
+        var admin = await NewAdminAsync();
+
+        var result = await ChangePlan(admin, Guid.NewGuid().ToString(), "pro");
+
+        Assert.Equal(StatusCodes.Status404NotFound, ResultAssert.Status(result));
+        Assert.Equal("NOT_FOUND", ResultAssert.Value<ApiError>(result).Error);
+    }
+
+    [Fact]
+    public async Task rolsuz_kullanici_plan_degistiremez()
+    {
+        var caller = await NewUserAsync("siradan-plan@ornek.test");
+        var target = await NewUserAsync("hedef-plan@ornek.test");
+
+        var result = await ChangePlan(caller, target.Id, "pro");
+
+        Assert.Equal(StatusCodes.Status403Forbidden, ResultAssert.Status(result));
+        using var after = db.NewContext();
+        Assert.Equal("free", after.Users.Single(u => u.Id == target.Id).Plan);
+    }
+
+    [Fact]
+    public async Task kimliksiz_istek_plan_degistiremez()
+    {
+        var target = await NewUserAsync();
+
+        var result = await AdminEndpoints.ChangePlan(
+            target.Id, new AdminChangePlanRequest("pro"), Users, Audit, TestHttp.Anonymous());
+
+        Assert.Equal(StatusCodes.Status401Unauthorized, ResultAssert.Status(result));
+    }
+
+    // Silmedeki self-delete/admin-target kısıtları BURADA yok — farklı risk
+    // sınıfı: plan değişimi geri alınabilir, admin kendi planını da değiştirebilir.
+    [Fact]
+    public async Task yonetici_kendi_planini_degistirebilir()
+    {
+        var admin = await NewAdminAsync();
+
+        var result = await ChangePlan(admin, admin.Id, "pro");
+
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+        using var after = db.NewContext();
+        Assert.Equal("pro", after.Users.Single(u => u.Id == admin.Id).Plan);
+    }
+
+    [Fact]
+    public async Task yonetici_baska_yoneticinin_planini_degistirebilir()
+    {
+        var admin = await NewAdminAsync();
+        var other = await NewAdminAsync("ikinci-plan@ornek.test");
+
+        var result = await ChangePlan(admin, other.Id, "pro");
+
+        Assert.Equal(StatusCodes.Status204NoContent, ResultAssert.Status(result));
+        using var after = db.NewContext();
+        Assert.Equal("pro", after.Users.Single(u => u.Id == other.Id).Plan);
+    }
+
+    // Parola İSTENMEZ (DeleteUser'ın aksine): `AdminChangePlanRequest` hiç
+    // parola alanı taşımaz, bu yüzden yanlış/boş parola senaryosu YOK — uç
+    // yalnız admin oturumuna bakar.
+
     // ---- Liste ----
 
     [Fact]
@@ -444,6 +582,33 @@ public class AdminEndpointsTests : IDisposable
 
         Assert.True(page.Items.Single(r => r.Id == admin.Id).IsAdmin);
         Assert.False(page.Items.Single(r => r.Id != admin.Id).IsAdmin);
+    }
+
+    // Kilit ham alan olarak taşınır (`LockoutEnd`), türetilmiş bir bool DEĞİL —
+    // panel "ne zaman açılacak"ı da göstermek istiyor. Kilitli olmayan hesapta
+    // alan null kalmalı: sessizce geçmiş bir tarih basmak "az önce açıldı" gibi
+    // yanlış okunurdu.
+    [Fact]
+    public async Task liste_kilitli_hesabin_lockoutEnd_alanini_tasir()
+    {
+        var admin = await NewAdminAsync();
+        var locked = await NewUserAsync("kilitli@ornek.test");
+        var free = await NewUserAsync("kilitsiz@ornek.test");
+        var until = DateTimeOffset.UtcNow.AddMinutes(5);
+        await Users.SetLockoutEndDateAsync(locked, until);
+
+        var page = ResultAssert.Value<AdminUserPage>(
+            await AdminEndpoints.ListUsers(Users, Scoped, TestHttp.For(admin)));
+
+        // SQLite saniyenin altını tam tik hassasiyetiyle taşımıyor — saniyeye
+        // yuvarlanmış karşılaştırma, alanın GERÇEKTEN veritabanından geldiğini
+        // kanıtlamaya yeter.
+        var got = page.Items.Single(r => r.Id == locked.Id).LockoutEnd;
+        Assert.NotNull(got);
+        Assert.True(
+            Math.Abs((until - got!.Value).TotalSeconds) < 1,
+            $"beklenen {until:o}, gelen {got:o}");
+        Assert.Null(page.Items.Single(r => r.Id == free.Id).LockoutEnd);
     }
 
     [Fact]

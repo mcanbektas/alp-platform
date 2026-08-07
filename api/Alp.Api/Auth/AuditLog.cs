@@ -16,6 +16,7 @@ internal static class AuditEventCodes
     public const string AdminUserDeleted = "admin.user-deleted";
     public const string AdminRoleGranted = "admin.role-granted";
     public const string AdminRoleRevoked = "admin.role-revoked";
+    public const string AdminPlanChanged = "admin.plan-changed";
 }
 
 // Denetim izinin TEK yazım noktası — uçlar elle `db.AuditEvents.Add` yazmaz.

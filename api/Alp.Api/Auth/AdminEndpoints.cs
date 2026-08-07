@@ -34,6 +34,10 @@ public static class AdminEndpoints
         // içerdiği için sınırı parola değiştirmeyle aynı kovada.
         admin.MapPost("/users/{id}/delete", DeleteUser)
             .RequireRateLimiting("password").LimitBodySize(AdminBodyLimitBytes);
+        // Parola istemez (bkz. ChangePlan yorumu) — "writes" kovası UpdateMe
+        // ile aynı, "password" kovasına girmiyor çünkü kimlik doğrulaması yok.
+        admin.MapPost("/users/{id}/plan", ChangePlan)
+            .RequireRateLimiting("writes").LimitBodySize(AdminBodyLimitBytes);
         admin.MapGet("/audit", ListAudit);
     }
 
@@ -105,6 +109,7 @@ public static class AdminEndpoints
                 u.Company,
                 u.Plan,
                 u.EmailConfirmed,
+                u.LockoutEnd,
                 u.CreatedAt,
                 ProjectCount = db.Projects.Count(p => p.UserId == u.Id),
                 ReportCount = db.Reports.Count(r => r.UserId == u.Id),
@@ -125,6 +130,7 @@ public static class AdminEndpoints
                 r.Company,
                 r.Plan,
                 r.EmailConfirmed,
+                r.LockoutEnd,
                 adminIds.Contains(r.Id),
                 r.CreatedAt,
                 r.ProjectCount,
@@ -188,6 +194,56 @@ public static class AdminEndpoints
         // gerekmez: her istekte kullanıcı `sub` ile yeniden okunuyor ve artık
         // bulunamıyor (Program.cs → OnTokenValidated). Yenileme token'ları
         // yukarıdaki silmeyle birlikte gitti.
+        return Results.NoContent();
+    }
+
+    // Plan değişimi (free ↔ pro). Ödeme sistemi yok, admin elle yönetiyor —
+    // bugüne kadar psql ile yapılıyordu, artık panelden. DeleteUser'ın
+    // aksine mevcut parola İSTEMEZ: plan değişimi geri alınabilir, düşük
+    // riskli bir işlem, ekstra sürtünme gerekmiyor (yalnız admin oturumu
+    // yeterli). Silmedeki self-delete/admin-target kısıtları da BURADA YOK —
+    // admin kendi planını değiştirebilir, farklı risk sınıfı.
+    internal static async Task<IResult> ChangePlan(
+        string id,
+        AdminChangePlanRequest req,
+        UserManager<ApplicationUser> userManager,
+        AuditLog auditLog,
+        HttpContext http)
+    {
+        var (admin, error) = await RequireAdmin(userManager, http);
+        if (error is not null) return error;
+
+        if (req.Plan is not ("free" or "pro"))
+        {
+            return Results.BadRequest(new ApiError("INVALID_PLAN"));
+        }
+
+        var target = await userManager.FindByIdAsync(id);
+        if (target is null) return Results.NotFound(new ApiError("NOT_FOUND"));
+
+        // Değer zaten aynıysa yine 204 döner ama audit YAZILMAZ: hiçbir şey
+        // değişmedi, iz bırakmak gürültüden başka bir şey olmazdı.
+        if (string.Equals(target.Plan, req.Plan, StringComparison.Ordinal))
+        {
+            return Results.NoContent();
+        }
+
+        var fromPlan = target.Plan;
+        target.Plan = req.Plan;
+
+        var updated = await userManager.UpdateAsync(target);
+        if (!updated.Succeeded)
+        {
+            return Results.BadRequest(new ApiError("IDENTITY_ERROR", new { codes = updated.Errors.Select(e => e.Code) }));
+        }
+
+        // Best-effort (WriteAsync): plan zaten değişti, iz yazımı patlarsa
+        // işlemi geri almanın bedeli faydasından ağır — DeleteUser'daki
+        // transaction-içi WriteCriticalAsync'in aksine burada kritik değil.
+        await auditLog.WriteAsync(
+            AuditEventCodes.AdminPlanChanged, admin, target, http,
+            new { fromPlan, toPlan = req.Plan });
+
         return Results.NoContent();
     }
 

@@ -26,6 +26,10 @@ public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 // parola değişimi geri alınabilir, silme alınamaz. Ele geçirilmiş bir yönetici
 // oturumu, parolayı bilmeden kullanıcı silemesin.
 public record AdminDeleteUserRequest(string CurrentPassword);
+// Plan değişimi — DeleteUser'ın aksine parola İSTEMEZ: geri alınabilir, düşük
+// riskli bir işlem (ödeme sistemi yok, admin elle yönetiyor). `Plan` yalnızca
+// "free" ya da "pro" olabilir, uç doğrular.
+public record AdminChangePlanRequest(string Plan);
 public record ResetPasswordRequest(string Email, string Token, string NewPassword);
 
 public record LoginResponse(string AccessToken, DateTimeOffset ExpiresAt);
@@ -40,6 +44,11 @@ public record MeResponse(
 // Yönetim panelindeki kullanıcı satırı. Parola özeti, güvenlik damgası ve
 // token gibi hiçbir kimlik alanı BURAYA GİRMEZ: panel bir kullanıcı listesidir,
 // kimlik deposunun kopyası değil.
+// `LockoutEnd` ham hâliyle taşınır (Identity'nin kendi alanı, `IdentityUser`den
+// miras) — türetilmiş bir `IsLockedOut` bool DEĞİL: panel yalnızca "kilitli mi"
+// değil "ne zaman açılacak" bilgisini de göstermek istiyor, iki alan yerine tek
+// alan yeter (istemci `lockoutEnd > şu an` ile kilitliyi kendi türetir; bkz.
+// AuthEndpoints.Login → `userManager.IsLockedOutAsync` aynı karşılaştırmayı yapar).
 public record AdminUserRow(
     string Id,
     string Email,
@@ -47,6 +56,7 @@ public record AdminUserRow(
     string? Company,
     string Plan,
     bool EmailConfirmed,
+    DateTimeOffset? LockoutEnd,
     bool IsAdmin,
     DateTimeOffset CreatedAt,
     int ProjectCount,
