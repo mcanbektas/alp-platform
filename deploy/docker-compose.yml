@@ -65,6 +65,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      seq:
+        condition: service_started
     environment:
       # Yerel yığın Development olarak koşar. Tek gerekçe: yenileme çerezi
       # üretimde Secure=true işaretlenir (AuthEndpoints.SetRefreshCookie) ve
@@ -116,8 +118,33 @@ services:
       Smtp__FromAddress: ${SMTP_FROM_ADDRESS:-}
       Smtp__FromName: ${SMTP_FROM_NAME:-ALP PCB Toolkit}
       Smtp__Security: ${SMTP_SECURITY:-StartTls}
+      # Boşsa sink hiç eklenmez (Program.cs) — yalnız bu Docker yığınında
+      # dolu. docs/loglama-karari.md §12: sunucu (brif 06) henüz yok, bu
+      # yüzden yalnız local compose'da; prod compose'a taşınmadı.
+      Seq__Url: http://seq
     volumes:
       - reports:/app/App_Data
+    networks:
+      - alpnet
+
+  # Operasyonel log deposu (docs/loglama-karari.md §12). stdout'un YANINDA
+  # durur, yerine geçmez — `docker compose logs api` hâlâ çalışır. Retention
+  # env ile kurulmuyor: ilk açılışta Seq arayüzünden (Settings → Retention)
+  # elle bir sınır konmalı, yoksa `seqdata` volume'u sınırsız büyür.
+  seq:
+    image: datalust/seq:2024.3
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      ACCEPT_EULA: "Y"
+    mem_limit: 256m
+    cpus: 0.5
+    ports:
+      # Yalnız localhost — dışarıya kapalı, admin arayüzüne geliştiricinin
+      # kendi makinesinden http://localhost:5341 ile erişilir.
+      - "127.0.0.1:5341:80"
+    volumes:
+      - seqdata:/data
     networks:
       - alpnet
 
@@ -151,6 +178,7 @@ volumes:
   # Yeniden adlandırılmadı: adı değiştirmek yeni ve BOŞ bir volume demek olur,
   # yani o an postası yolda olan doğrulama bağlantılarının geçersizleşmesi.
   reports:
+  seqdata:
 
 networks:
   alpnet:

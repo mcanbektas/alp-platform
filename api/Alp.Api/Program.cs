@@ -67,6 +67,16 @@ try
         {
             cfg.WriteTo.Console(new CompactJsonFormatter());
         }
+
+        // Seq stdout'un YANINA eklenir, yerine geçmez (docs/loglama-karari.md
+        // §12). Yalnız Seq:Url doluyken devreye girer — appsettings.json'daki
+        // varsayılan boş, yani Docker'sız günlük iş akışı (npm run stack) hiç
+        // etkilenmez. docker-compose.yml Seq__Url=http://seq ile açar.
+        var seqUrl = builder.Configuration["Seq:Url"];
+        if (!string.IsNullOrWhiteSpace(seqUrl))
+        {
+            cfg.WriteTo.Seq(seqUrl);
+        }
     });
 
     // ---- Veritabanı ----
