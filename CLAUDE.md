@@ -117,13 +117,17 @@ Doğrulama, parola sıfırlama ve kayıt denemesi postalarının konusu ve gövd
 istemci belirlerse uç, bizim alan adımızdan çıkan ve markamızı taşıyan serbest metni istenen
 adrese postalayan bir araca döner — kimlik avı yüzeyi.
 
-**Bilinen borç (Faz 3'te kapanacak).** Postadaki bağlantı yolları (`ConfirmEmailPaths`,
-`ResetPasswordPaths`, `UnlockAccountPaths`) PCB SPA'sının rota sözlüğünün ikinci kopyasıdır.
-Ayrıştırmadan önce bir bekçi testi (`web/src/lib/authMailPaths.guard.test.js`) iki kopyayı
-karşılaştırıyordu; depolar bölününce o test dosya bulamayınca atlıyor. Doğru çözüm sabit tablo
-değil: **auth mail yolları ürün başına yapılandırmaya taşınacak** — Comm'un da kendi doğrulama
-sayfası olacak ve tek sabit tablo zaten yetmeyecek. O gün gelene kadar bu tablo elle değişir ve
-değiştiğinde PCB tarafındaki `lib/routes.js` ile karşılaştırılır.
+**Ürün başına posta yapılandırması (Faz 3'te kapandı).** Bağlantı yolları, marka adı ve ön
+yüz adresi artık `Auth/ProductMail.cs`te ürün anahtarına göre çözülür ve appsettings'ten
+(`App:Products:<ürün>:...`) override edilebilir — sabit, tek ürüne bağlı bir tablo değil.
+İstemci isteğe `product` alanı ekler (`"pcb"` | `"comm"`, varsayılan `"pcb"`); eski PCB
+istemcisi bu alanı hiç göndermez ve `App:FrontendBaseUrl` üzerinden ESKİ davranışla birebir
+aynı sonuca düşer — geriye dönük kırılma yok. Comm için karşılığı ayarlanmamışsa
+`localhost:3001` ve PCB'yle aynı yol adlarına düşülür; gerçek rotalar netleşince yalnızca
+appsettings değişir, kod değişmez. Eski bekçi testinin (`authMailPaths.guard.test.js`,
+alp-pcb-toolkit) çözdüğü riski — postadaki yolun SPA'nın gerçek rotasından sapması — artık
+kod değil yapılandırma taşıdığı için o test devralınmadı; yol değiştiğinde `App:Products`
+altındaki ilgili anahtarın SPA'nın rota sözlüğüyle elle karşılaştırılması gerekir.
 
 ## Kurallar
 

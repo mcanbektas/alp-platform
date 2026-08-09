@@ -5,7 +5,11 @@ namespace Alp.Api.Auth;
 // Alan gövdede taşınır; gerekçe ve elenen seçenekler (Accept-Language, kalıcı
 // hesap dili) docs/eposta-dili-karari.md §1. İstemci yalnızca DİL KODU
 // gönderir, metni değil (§2).
-public record RegisterRequest(string Email, string Password, string DisplayName, string? Lang = null);
+// `Product` isteğe bağlıdır ve verilmezse "pcb" sayılır (ProductMail.Resolve) —
+// eski istemciler bu alanı hiç göndermez, davranışları değişmez. Postanın
+// markası ve bağlantı adresi bu alandan seçilir (Faz 3: auth mail yolları
+// ürün başına yapılandırma, bkz. Auth/ProductMail.cs).
+public record RegisterRequest(string Email, string Password, string DisplayName, string? Lang = null, string? Product = null);
 // RememberMe isteğe bağlıdır ve varsayılanı false: alan gönderilmezse oturum
 // tarayıcı kapanınca biter. Eski istemci gövdesi bu yüzden kırılmaz.
 //
@@ -13,12 +17,12 @@ public record RegisterRequest(string Email, string Password, string DisplayName,
 // deneme hesabı kilitler ve kullanıcıya iki bağlantılı bir bilgilendirme
 // gider (AuthEndpoints.Login). Postanın dili başka hiçbir kaynaktan
 // okunamaz — kayıt/parola sıfırlama ile aynı kural (docs/eposta-dili-karari.md §1).
-public record LoginRequest(string Email, string Password, bool RememberMe = false, string? Lang = null);
-public record ForgotPasswordRequest(string Email, string? Lang = null);
+public record LoginRequest(string Email, string Password, bool RememberMe = false, string? Lang = null, string? Product = null);
+public record ForgotPasswordRequest(string Email, string? Lang = null, string? Product = null);
 // Doğrulama postası kaybolduğunda kendi kendine kurtarma. Bu uç olmadan
 // akış çıkmaz sokaktı: RequireConfirmedEmail açıkken giriş yapılamıyor,
 // ForgotPassword da doğrulanmış e-posta şartı koşuyor.
-public record ResendConfirmationRequest(string Email, string? Lang = null);
+public record ResendConfirmationRequest(string Email, string? Lang = null, string? Product = null);
 // Oturum açmış kullanıcının kendi parolasını değiştirmesi. Mevcut parola
 // ZORUNLUDUR: erişim token'ı ele geçirilmiş bir oturum, parolayı da
 // değiştirip hesabı büsbütün devralamasın diye.

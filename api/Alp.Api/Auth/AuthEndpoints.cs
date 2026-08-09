@@ -64,15 +64,6 @@ public static class AuthEndpoints
         // (web/src/data/legalText.js).
     }
 
-    // appsettings.json anahtarı boş dize olarak commit edilir (gizli değer
-    // yok), `??` yalnızca null'da devreye girer — boş dize de "ayarlanmamış"
-    // sayılmalı. Program.cs'teki CORS kararıyla aynı gerekçe.
-    private static string FrontendBaseUrl(IConfiguration config)
-    {
-        var url = config["App:FrontendBaseUrl"];
-        return string.IsNullOrWhiteSpace(url) ? "http://localhost:3000" : url;
-    }
-
     internal static async Task<IResult> Register(
         RegisterRequest req,
         UserManager<ApplicationUser> userManager,
@@ -115,9 +106,10 @@ public static class AuthEndpoints
                     // Kabul edildi, çünkü içerik zararsız (token taşımaz) ve
                     // daha iyisi kalıcı hesap dili olurdu — o da elendi
                     // (docs/eposta-dili-karari.md §1, §7).
+                    var branding = ProductMail.Resolve(config, req.Product, lang);
                     await emailSender.SendAsync(existing.Email!,
                         AuthEmailText.DuplicateRegistrationSubject(lang),
-                        AuthEmailText.DuplicateRegistrationBody(lang));
+                        AuthEmailText.DuplicateRegistrationBody(lang, branding.Brand));
                 }
                 return Results.Created();
             }
@@ -134,7 +126,7 @@ public static class AuthEndpoints
         // rol talep edemez.
         await AdminSeeder.GrantIfListedAsync(userManager, config, user, auditLog);
 
-        await SendConfirmationMail(user, userManager, emailSender, config, lang);
+        await SendConfirmationMail(user, userManager, emailSender, config, req.Product, lang);
 
         return Results.Created();
     }
@@ -146,10 +138,12 @@ public static class AuthEndpoints
         UserManager<ApplicationUser> userManager,
         IEmailSender emailSender,
         IConfiguration config,
+        string? product,
         string lang)
     {
+        var branding = ProductMail.Resolve(config, product, lang);
         var token = await userManager.GenerateEmailConfirmationTokenAsync(user);
-        var link = $"{FrontendBaseUrl(config)}{AuthEmailText.ConfirmEmailPath(lang)}"
+        var link = $"{branding.BaseUrl}{branding.ConfirmEmailPath}"
             + $"?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(token)}";
         await emailSender.SendAsync(user.Email!,
             AuthEmailText.ConfirmEmailSubject(lang),
@@ -173,7 +167,7 @@ public static class AuthEndpoints
         if (user is not null && !await userManager.IsEmailConfirmedAsync(user))
         {
             await SendConfirmationMail(user, userManager, emailSender, config,
-                AuthEmailText.Normalize(req.Lang));
+                req.Product, AuthEmailText.Normalize(req.Lang));
         }
 
         return Results.Ok();
@@ -243,7 +237,7 @@ public static class AuthEndpoints
                         AuditEventCodes.AuthLockout, actor: null, target: user, http,
                         new { failedCount = userManager.Options.Lockout.MaxFailedAccessAttempts });
 
-                    await SendLockoutMail(user, userManager, emailSender, config, AuthEmailText.Normalize(req.Lang));
+                    await SendLockoutMail(user, userManager, emailSender, config, req.Product, AuthEmailText.Normalize(req.Lang));
                 }
             }
             return Results.Json(new ApiError("INVALID_CREDENTIALS"), statusCode: StatusCodes.Status401Unauthorized);
@@ -279,28 +273,30 @@ public static class AuthEndpoints
         UserManager<ApplicationUser> userManager,
         IEmailSender emailSender,
         IConfiguration config,
+        string? product,
         string lang)
     {
-        var baseUrl = FrontendBaseUrl(config);
+        var branding = ProductMail.Resolve(config, product, lang);
 
         // Genel amaçlı token sağlayıcısı + KENDİNE ÖZGÜ purpose — e-posta
         // doğrulama ve parola sıfırlamanın zaten yaptığı şey. Yeni bir sağlayıcı
         // kaydı gerekmez; purpose'un tekliği token'ları birbirinden ayırır.
         var unlockToken = await userManager.GenerateUserTokenAsync(
             user, TokenOptions.DefaultProvider, UnlockPurpose(user.LockoutEnd));
-        var unlockLink = $"{baseUrl}{AuthEmailText.UnlockAccountPath(lang)}"
+        var unlockLink = $"{branding.BaseUrl}{branding.UnlockAccountPath}"
             + $"?userId={Uri.EscapeDataString(user.Id)}&token={Uri.EscapeDataString(unlockToken)}";
 
         // ForgotPassword ile AYNI mekanizma ve AYNI sayfa — ikinci bir sıfırlama
         // yüzeyi açılırsa biri düzeltilip öteki unutulur.
         var resetToken = await userManager.GeneratePasswordResetTokenAsync(user);
-        var resetLink = $"{baseUrl}{AuthEmailText.ResetPasswordPath(lang)}"
+        var resetLink = $"{branding.BaseUrl}{branding.ResetPasswordPath}"
             + $"?email={Uri.EscapeDataString(user.Email!)}&token={Uri.EscapeDataString(resetToken)}";
 
         await emailSender.SendAsync(user.Email!,
             AuthEmailText.AccountLockedSubject(lang),
             AuthEmailText.AccountLockedBody(
                 lang,
+                branding.Brand,
                 userManager.Options.Lockout.MaxFailedAccessAttempts,
                 (int)userManager.Options.Lockout.DefaultLockoutTimeSpan.TotalMinutes,
                 unlockLink,
@@ -534,8 +530,9 @@ public static class AuthEndpoints
         if (user is not null && await userManager.IsEmailConfirmedAsync(user))
         {
             var lang = AuthEmailText.Normalize(req.Lang);
+            var branding = ProductMail.Resolve(config, req.Product, lang);
             var token = await userManager.GeneratePasswordResetTokenAsync(user);
-            var link = $"{FrontendBaseUrl(config)}{AuthEmailText.ResetPasswordPath(lang)}"
+            var link = $"{branding.BaseUrl}{branding.ResetPasswordPath}"
                 + $"?email={Uri.EscapeDataString(req.Email)}&token={Uri.EscapeDataString(token)}";
             await emailSender.SendAsync(req.Email,
                 AuthEmailText.ResetPasswordSubject(lang),

@@ -101,6 +101,39 @@ internal sealed class TestDb : IDisposable
         return calculation;
     }
 
+    public CommProject AddCommProject(ApplicationUser owner, string name = "Comm Projesi")
+    {
+        var project = new CommProject
+        {
+            Id = Guid.NewGuid(),
+            UserId = owner.Id,
+            Name = name,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        Db.CommProjects.Add(project);
+        Db.SaveChanges();
+        return project;
+    }
+
+    public ProtocolSchema AddProtocolSchema(
+        CommProject project, string name = "schema", string version = "1.0", string definitionJson = "{}")
+    {
+        var schema = new ProtocolSchema
+        {
+            Id = Guid.NewGuid(),
+            CommProjectId = project.Id,
+            Name = name,
+            Version = version,
+            DefinitionJson = definitionJson,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        Db.ProtocolSchemas.Add(schema);
+        Db.SaveChanges();
+        return schema;
+    }
+
     public void Dispose()
     {
         foreach (var ctx in contexts) ctx.Dispose();

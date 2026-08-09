@@ -84,6 +84,11 @@ services:
       Jwt__Issuer: ${JWT_ISSUER:-alp-pcb-toolkit}
       Jwt__Audience: ${JWT_AUDIENCE:-alp-pcb-toolkit}
       App__FrontendBaseUrl: ${FRONTEND_BASE_URL:-http://localhost:8080}
+      # Comm SPA'sı bu depoda değil, ayrı repoda kendi `npm run stack`'iyle
+      # koşar (alp-comm-toolkit) — burada yalnız CORS'un ve kimlik
+      # postalarının onu tanıması için origin'i verilir. Boş bırakılırsa
+      # Comm CORS'a girmez, PCB etkilenmez (bkz. Program.cs).
+      App__Products__comm__FrontendBaseUrl: ${COMM_FRONTEND_BASE_URL:-http://localhost:3001}
       # Yönetim paneline girebilecek hesapların e-postaları (virgülle ayrılır).
       # Yetkinin TEK kaynağı budur: panelden ya da kayıttan admin olunamaz.
       # Değiştirdikten sonra api yeniden başlatılır — eşitleme açılışta koşar.

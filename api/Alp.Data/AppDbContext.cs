@@ -15,6 +15,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
     public DbSet<ReportSnapshotSection> ReportSnapshotSections => Set<ReportSnapshotSection>();
     public DbSet<ThicknessRecord> ThicknessRecords => Set<ThicknessRecord>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<CommProject> CommProjects => Set<CommProject>();
+    public DbSet<ProtocolSchema> ProtocolSchemas => Set<ProtocolSchema>();
 
     // SQLite `DateTimeOffset`i ORDER BY'da REDDEDER (NotSupportedException) —
     // değeri metin olarak sakladığı için metin sıralaması yanlış sonuç verirdi.
@@ -149,6 +151,40 @@ public class AppDbContext(DbContextOptions<AppDbContext> options)
             e.Property(a => a.Ip).HasMaxLength(45);
             e.HasIndex(a => a.OccurredAt);
             e.HasIndex(a => a.Event);
+        });
+
+        // ---- Comm modülü (CLAUDE.md "Ürün modülü kuralları") ----
+        // İlk şema-ayrılmış modül: kendi tabloları `comm` şemasında yaşar.
+        // AspNetUsers'a giden FK istisnadır (Identity ortak kabul edilir,
+        // Project/Calculation de aynı şekilde bağlanır) — modüller arası FK
+        // yasağı bunu kapsamaz. Identity/Project/Report tabloları kendileri
+        // henüz ayrı bir `platform` şemasına taşınmadı (bu depodaki İLK
+        // şema-ayrımı budur); o taşıma ayrı, geniş kapsamlı bir migrasyon
+        // ister ve bu fazın kapsamında değil.
+        builder.Entity<CommProject>(e =>
+        {
+            e.ToTable("comm_projects", schema: "comm");
+            e.Property(p => p.Name).HasMaxLength(CommProject.NameMaxLength);
+            e.Property(p => p.Description).HasMaxLength(CommProject.DescriptionMaxLength);
+            e.HasIndex(p => p.UserId);
+            e.HasOne(p => p.User).WithMany().HasForeignKey(p => p.UserId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        builder.Entity<ProtocolSchema>(e =>
+        {
+            e.ToTable("comm_protocol_schemas", schema: "comm");
+            e.Property(s => s.Name).HasMaxLength(ProtocolSchema.NameMaxLength);
+            e.Property(s => s.Version).HasMaxLength(ProtocolSchema.VersionMaxLength);
+            // jsonb yalnızca Postgres'te anlamlıdır; SQLite (testler) düz
+            // metin olarak saklar — DateTimeOffset dönüşümündeki kalıpla aynı
+            // sağlayıcı-koşullu yaklaşım.
+            if (Database.ProviderName?.Contains("Npgsql", StringComparison.Ordinal) == true)
+            {
+                e.Property(s => s.DefinitionJson).HasColumnType("jsonb");
+            }
+            e.HasIndex(s => new { s.CommProjectId, s.Name, s.Version }).IsUnique();
+            e.HasOne(s => s.CommProject).WithMany(p => p.ProtocolSchemas)
+                .HasForeignKey(s => s.CommProjectId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

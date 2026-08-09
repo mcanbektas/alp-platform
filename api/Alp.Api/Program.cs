@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using Alp.Api.Auth;
+using Alp.Api.Comm;
 using Alp.Api.Common;
 using Alp.Api.Logging;
 using Alp.Api.Projects;
@@ -359,10 +360,29 @@ try
         }
         frontendOrigin = "http://localhost:3000";
     }
+
+    // Comm SPA'sı ayrı bir origin'den koşar (yerelde :3001, alp-comm-toolkit).
+    // Boş bırakılırsa üretimde HATA VERİLMEZ — PCB tek başına da geçerli bir
+    // dağıtımdır (Comm henüz Faz 4'te edge routing'e kavuşmadı); yalnızca
+    // Comm origin'i CORS'a girmemiş olur, PCB etkilenmez. Geliştirmede
+    // frontendOrigin'le AYNI mantık: ayarlanmamışsa yerel varsayılana düşer,
+    // yoksa `npm run stack`'i api'nin dışında çalıştıran Comm deposu CORS'ta
+    // sessizce kesilir. Ayarlandığında AuthEndpoints'teki kimlik postaları da
+    // AYNI anahtarı okur (App:Products:comm:FrontendBaseUrl, bkz.
+    // ProductMail) — tek yerden.
+    var commOrigin = builder.Configuration["App:Products:comm:FrontendBaseUrl"];
+    if (string.IsNullOrWhiteSpace(commOrigin) && builder.Environment.IsDevelopment())
+    {
+        commOrigin = "http://localhost:3001";
+    }
+    var allowedOrigins = string.IsNullOrWhiteSpace(commOrigin)
+        ? new[] { frontendOrigin }
+        : new[] { frontendOrigin, commOrigin };
+
     builder.Services.AddCors(opt =>
     {
         opt.AddDefaultPolicy(policy =>
-            policy.WithOrigins(frontendOrigin).AllowAnyHeader().AllowAnyMethod().AllowCredentials());
+            policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials());
     });
 
     // ---- Rapor üretimi ----
@@ -631,6 +651,7 @@ try
     app.MapAdminEndpoints();
     app.MapReportEndpoints();
     app.MapProjectEndpoints();
+    app.MapCommEndpoints();
 
     app.Run();
 }

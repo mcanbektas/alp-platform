@@ -12,36 +12,13 @@ namespace Alp.Api.Auth;
 // Gerekçenin tamamı: docs/eposta-dili-karari.md §2.
 internal static class AuthEmailText
 {
-    // Marka adı çevrilmez.
-    private const string Brand = "ALP PCB Toolkit";
-
     public const string DefaultLang = "tr";
 
-    // Bağlantı yolları. Bu tablo istemcideki `web/src/lib/routes.js`
-    // (`STATIC_ROUTES`) sözlüğünün İKİNCİ kopyasıdır ve ayrıştığı gün postadaki
-    // bağlantı 404'e gider — kullanıcı hesabını doğrulayamaz. Kopyayı
-    // `web/src/lib/authMailPaths.guard.test.js` bekler: bu dosyayı metin olarak
-    // okur, yolları çıkarır ve `staticPath` ile karşılaştırır.
-    private static readonly Dictionary<string, string> ConfirmEmailPaths = new()
-    {
-        ["tr"] = "/e-posta-dogrula",
-        ["en"] = "/en/confirm-email",
-    };
-
-    private static readonly Dictionary<string, string> ResetPasswordPaths = new()
-    {
-        ["tr"] = "/parola-sifirla",
-        ["en"] = "/en/reset-password",
-    };
-
-    // Kilitlenme postasındaki "kilidi aç" bağlantısı. Parola sıfırlamadan AYRI
-    // bir sayfadır çünkü yaptığı şey de ayrıdır: parolayı DEĞİŞTİRMEZ, yalnızca
-    // kilidi kaldırır (POST /api/auth/unlock).
-    private static readonly Dictionary<string, string> UnlockAccountPaths = new()
-    {
-        ["tr"] = "/kilit-ac",
-        ["en"] = "/en/unlock-account",
-    };
+    // Bağlantı yolları, marka adı ve ön yüz adresi artık ürün başına
+    // ProductMail'de çözülür (Faz 3: "auth mail yolları ürün başına
+    // yapılandırmaya taşınacak", CLAUDE.md). Bu sınıfta yalnızca dil
+    // normalizasyonu ve konu/gövde METNİ kalır — hangi ürün için üretildiği
+    // çağıran tarafından `brand` parametresiyle verilir.
 
     // Tanınmayan, boş ya da null dil Türkçeye düşer (istemcideki DEFAULT_LANG
     // ile aynı kural). Bölge eki kabul edilir: dil kodu tarayıcıdan geçerken
@@ -53,21 +30,15 @@ internal static class AuthEmailText
         return primary == "en" ? "en" : DefaultLang;
     }
 
-    public static string ConfirmEmailPath(string lang) => ConfirmEmailPaths[Normalize(lang)];
-
-    public static string ResetPasswordPath(string lang) => ResetPasswordPaths[Normalize(lang)];
-
-    public static string UnlockAccountPath(string lang) => UnlockAccountPaths[Normalize(lang)];
-
     public static string DuplicateRegistrationSubject(string lang) =>
         Normalize(lang) == "en" ? "Registration attempt" : "Kayıt denemesi";
 
-    public static string DuplicateRegistrationBody(string lang) =>
+    public static string DuplicateRegistrationBody(string lang, string brand) =>
         Normalize(lang) == "en"
-            ? $"Someone tried to open a new account on {Brand} with this e-mail address. "
+            ? $"Someone tried to open a new account on {brand} with this e-mail address. "
               + "You already have an account — if this was not you, you can ignore this message. "
               + "If you forgot your password, use the password reset page."
-            : $"Bu e-posta adresiyle {Brand} üzerinde yeni bir hesap açılmaya "
+            : $"Bu e-posta adresiyle {brand} üzerinde yeni bir hesap açılmaya "
               + "çalışıldı. Zaten bir hesabın var — bu sen değilsen görmezden gelebilirsin. "
               + "Parolanı unuttuysan parola sıfırlama sayfasını kullan.";
 
@@ -96,15 +67,15 @@ internal static class AuthEmailText
     // kilit zaten kendiliğinden açılacak — ve bu da söylenir, yoksa posta
     // gereksiz bir parola değişimine itekler.
     public static string AccountLockedBody(
-        string lang, int attempts, int minutes, string unlockLink, string resetLink) =>
+        string lang, string brand, int attempts, int minutes, string unlockLink, string resetLink) =>
         Normalize(lang) == "en"
-            ? $"Your {Brand} account was locked after {attempts} failed sign-in attempts. "
+            ? $"Your {brand} account was locked after {attempts} failed sign-in attempts. "
               + $"It unlocks by itself in {minutes} minutes — if those attempts were yours, "
               + "you do not have to do anything.<br><br>"
               + "If they were not, use one of these links:<br>"
               + $"Unlock now, keeping your current password: <a href=\"{unlockLink}\">{unlockLink}</a><br>"
               + $"Reset your password: <a href=\"{resetLink}\">{resetLink}</a>"
-            : $"{Brand} hesabın {attempts} başarısız giriş denemesinden sonra kilitlendi. "
+            : $"{brand} hesabın {attempts} başarısız giriş denemesinden sonra kilitlendi. "
               + $"Kilit {minutes} dakika içinde kendiliğinden açılır — bu denemeleri sen "
               + "yaptıysan bir şey yapmana gerek yok.<br><br>"
               + "Sen değilsen bağlantılardan birini kullan:<br>"
