@@ -26,3 +26,18 @@ jobs:
       # sahiplik) testten geçmeden ileri gidilmez. Veritabanı servisi gerekmez:
       # testler bellek içi SQLite kurar, bkz. Alp.Api.Tests/TestHost.cs
       - run: dotnet test api/Alp.Api.sln -c Release --no-build --verbosity minimal
+
+  design:
+    name: design — build + typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: design/package-lock.json
+      - run: npm ci
+        working-directory: design
+      - run: npm run build
+        working-directory: design

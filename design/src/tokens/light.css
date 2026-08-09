@@ -1,0 +1,43 @@
+/* Açık tema — semantik token'lar.
+   İsimlendirme PCB'nin 4 temasından (solder-light/instrument/graphite/solder) damıtıldı;
+   Faz P retrofit'inde PCB tarafı bu isimlere birebir eşlenecek. Bant/rozet gibi PCB'ye özgü
+   sabit paletler (--pro-*, --band-*) buraya girmedi — onlar PCB'nin kendi tema dosyasında kalır. */
+:root,
+[data-theme='light'] {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --raised: #ffffff;
+  --line: #e2e5ea;
+  --line-strong: #c7ccd4;
+
+  --text: #1a1d21;
+  --muted: #5b6270;
+
+  --accent: #2f5fd6;
+  --accent-dim: #4a74dd;
+  --accent-strong: #1f45a8;
+  --accent-soft: #e7ecfb;
+  --on-accent: #ffffff;
+
+  --warn: #b8860b;
+  --warn-soft: #fbf1d8;
+  --danger: #c92c2c;
+  --danger-soft: #fbe3e3;
+  --danger-strong: #971f1f;
+  --on-danger: #ffffff;
+
+  --shadow: 0 1px 2px rgba(20, 20, 30, 0.08);
+  --shadow-hover: 0 4px 12px rgba(20, 20, 30, 0.12);
+
+  --series-1: #2f5fd6;
+  --series-2: #1f9d6c;
+  --series-3: #d69a1f;
+  --series-4: #b23fd6;
+
+  --font-display: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+}

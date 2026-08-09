@@ -13,3 +13,7 @@ deploy/*.env
 
 .DS_Store
 *.local
+
+# design
+design/dist/
+design/node_modules/
