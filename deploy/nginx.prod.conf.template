@@ -1,4 +1,5 @@
-# Üretim: TLS sonlandırma + SPA + /api ters vekili.
+# Üretim: TLS sonlandırma + süit kenarı (landing + /pcb + /comm path routing)
+# + /api ters vekili. `edge` servisi bunu çalıştırır (docker-compose.prod.yml).
 #
 # Bu bir ŞABLONDUR. nginx imajının giriş noktası /etc/nginx/templates/ altındaki
 # `.template` dosyalarını envsubst'tan geçirip /etc/nginx/conf.d/ altına yazar ve
@@ -11,6 +12,10 @@
 # İlk sertifika alınmadan önce 443 bloğu açılamaz — sıra deploy/README.md'de.
 #
 # DİKKAT — nginx'te `add_header` MİRAS ALINMAZ (bkz. nginx.conf'taki aynı not).
+#
+# BİLİNEN ENGEL — nginx.conf'taki "BİLİNEN ENGEL" notuyla BİREBİR aynı: PCB/Comm
+# kendi `base`'lerini `/pcb/`/`/comm/`'a çevirip kendi nginx'lerinde de aynı
+# öneki tanımadan bu path routing gerçek trafikte çalışmaz. deploy/README.md.
 
 # Kenar hız sınırı — gerekçe nginx.conf'taki aynı bloğun yorumunda.
 # ($binary_remote_addr bir nginx değişkenidir; envsubst yalnızca ortamda
@@ -50,10 +55,11 @@ server {
         root /var/www/certbot;
     }
 
-    # Konteyner sağlık kontrolü düz HTTP'den gelir (web/Dockerfile,
-    # http://127.0.0.1/healthz). Yalnızca 443 bloğunda olsaydı kontrol 301
-    # alır ve busybox wget'in yönlendirmeyi izleyip sertifika uyumsuzluğunu
-    # yutmasına bel bağlanırdı — burada doğrudan 200 döner.
+    # Konteyner sağlık kontrolü düz HTTP'den gelir (edge imajının varsayılan
+    # sağlık kontrolü, http://127.0.0.1/healthz). Yalnızca 443 bloğunda
+    # olsaydı kontrol 301 alır ve busybox wget'in yönlendirmeyi izleyip
+    # sertifika uyumsuzluğunu yutmasına bel bağlanırdı — burada doğrudan 200
+    # döner.
     location = /healthz {
         access_log off;
         default_type text/plain;
@@ -94,6 +100,8 @@ server {
     ssl_stapling_verify on;
     ssl_trusted_certificate /etc/letsencrypt/live/${APP_DOMAIN}/chain.pem;
 
+    # Yalnızca landing'in statik dosyaları burada durur — PCB/Comm kendi
+    # konteynerlerinde, kendi root'larında.
     root /usr/share/nginx/html;
     index index.html;
 
@@ -109,29 +117,18 @@ server {
         application/javascript application/json application/xml
         image/svg+xml;
 
-    # HSTS yalnızca burada: TLS'siz yapılandırmada anlamsızdır ve alan adını
-    # sertifika hazır olmadan HTTPS'e kilitlerdi.
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "DENY" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    # CSP ve Permissions-Policy — gerekçe nginx.conf'taki aynı bloğun
-    # yorumunda; iki dosya birebir aynı politikayı taşır.
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
-    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-
     location = /healthz {
         access_log off;
         default_type text/plain;
         return 200 "ok\n";
     }
 
-    # ---- API ters vekili (nginx.conf ile birebir aynı) ----
-    # Değişken + resolver: sabit yazıldığında nginx api'nin IP'sini açılışta bir
-    # kez çözer ve saklar; api konteyneri yeniden yaratıldığında ölü adrese
-    # vekiller. Ayrıntı nginx.conf'taki aynı bloğun yorumunda.
+    # `pcb`/`comm`/`api` adları DEĞİŞKEN üzerinden çözülür ve resolver
+    # verilir — gerekçe nginx.conf'taki aynı bloğun yorumunda. Vekilleme
+    # ŞEFFAFTİR: öneki (`/pcb`, `/comm`) SİLMEZ, aynen iletir.
     resolver 127.0.0.11 valid=10s ipv6=off;
 
+    # ---- API ters vekili (nginx.conf ile birebir aynı) ----
     location /api/ {
         limit_req zone=api_edge burst=40 nodelay;
         limit_req_status 429;
@@ -145,11 +142,6 @@ server {
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header X-Forwarded-Host  $host;
-        # İstek korelasyonu (docs/brifler/14-loglama-altyapi.md §2) — bkz.
-        # deploy/nginx.conf'taki aynı satırın gerekçesi. Bu dosya ÜRETİMİN
-        # kendisi (deploy/README.md'deki tablo: nginx.conf TLS'siz/gömülü,
-        # bu dosya üretim örtüsü) — ikisi elle senkron tutulur, review'da
-        # bu satır ilk turda yalnız nginx.conf'a girmiş, burası unutulmuştu.
         proxy_set_header X-Request-Id      $request_id;
 
         proxy_connect_timeout 10s;
@@ -158,59 +150,46 @@ server {
         proxy_buffering off;
     }
 
-    location /assets/ {
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "DENY" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
-        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-        try_files $uri =404;
+    # ---- Ürün SPA'ları (nginx.conf ile birebir aynı desen) ----
+    location = /pcb { return 301 /pcb/; }
+    location = /comm { return 301 /comm/; }
+
+    location /pcb/ {
+        set $pcb_upstream http://pcb:80;
+        proxy_pass $pcb_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Request-Id      $request_id;
     }
 
-    # Yazı tipleri: dosya adı içeriğiyle sabittir, aşağıdaki no-store bunlara
-    # uygulanmamalı. Gerekçe nginx.conf'taki nottadır.
-    location /fonts/ {
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "DENY" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
-        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-        try_files $uri =404;
+    # Comm'un henüz yayınlanmış bir imajı yok — gerekçe nginx.conf'taki aynı
+    # bloğun yorumunda. `comm` servisi ayağa kalkana dek 502 döner, edge
+    # açılışta patlamaz.
+    location /comm/ {
+        set $comm_upstream http://comm:80;
+        proxy_pass $comm_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Request-Id      $request_id;
     }
 
-    # Web app manifest'i — ayrı blokta olmasının tek nedeni içerik tipi
-    # (`.webmanifest` mime.types'ta yok). Gerekçe nginx.conf'ta.
-    location = /manifest.webmanifest {
-        default_type application/manifest+json;
-        add_header Cache-Control "no-store, must-revalidate" always;
-        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "DENY" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
-        add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-        try_files $uri =404;
-    }
-
-    # HTML kabukları + SPA geri düşüşü. `no-store` burada durur: prerender'dan
-    # sonra kabuk tek dosya değil (38 sayfa + spa-fallback) ve `try_files` iç
-    # yönlendirmesi location'ı yeniden seçmediği için ayrı bir dosya-adı bloğu
-    # geri düşüşle gelen istekleri hiç yakalamıyordu. `$uri.html` prerender
-    # çıktısını 301 yönlendirmesi olmadan servis eder. Uzun gerekçe:
-    # nginx.conf'taki not, docs/prerender-karari.md §6.
+    # ---- Landing (statik, build'siz) ----
     location / {
         add_header Cache-Control "no-store, must-revalidate" always;
         add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header X-Frame-Options "DENY" always;
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
         add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()" always;
-        # `$uri/index.html` kök isteği (`/`) için şart — gerekçe nginx.conf'ta.
-        try_files $uri $uri.html $uri/index.html /spa-fallback.html /index.html;
+        try_files $uri $uri/ =404;
     }
 }

@@ -1,0 +1,24 @@
+# Comm SPA'sını YERELDE derlemek için örtü — pcb-local.yml ile birebir aynı
+# desen. `comm` servisi temel dosyada `profiles: [comm]` altında olduğu için
+# bu örtüyle birlikte de profil AÇIKÇA istenmeli:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.comm-local.yml \
+#     --profile comm up -d --build
+#
+# BUGÜN ÇALIŞMAZ: alp-comm-toolkit henüz Faz 2 olgunluğunda ve bir
+# `web/Dockerfile` YAYINLAMIYOR (bkz. o depodaki CLAUDE.md). Bu dosya, o
+# depo Dockerfile'ını ekleyince tek satır değişmeden çalışacak şekilde,
+# pcb-local.yml'in simetriği olarak önden yazıldı — "compose süit düzeni"
+# kapsamı bunu istiyor, ama test edilemedi (bkz. deploy/README.md → "Bilinen
+# engel").
+#
+# ÖN KOŞUL: iki depo kardeş dizinlerde durmalı —
+#   <bir dizin>/alp-platform       (bu depo)
+#   <bir dizin>/alp-comm-toolkit   (SPA)
+# Başka bir yerdeyse aşağıdaki `context` yolu ona göre değiştirilir.
+
+services:
+  comm:
+    build:
+      context: ../../alp-comm-toolkit
+      dockerfile: web/Dockerfile

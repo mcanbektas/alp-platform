@@ -10,7 +10,7 @@ her ürün kendi deposunda kendi SPA'sını ve kendi imajını taşır:
 
 | Depo | İçerik | Durum |
 |---|---|---|
-| **alp-platform** (burası) | `api/` (ASP.NET Core 9), `deploy/`, `assets/`, ileride `landing/` ve `design/` | aktif |
+| **alp-platform** (burası) | `api/` (ASP.NET Core 9), `deploy/`, `assets/`, `design/`, `landing/` | aktif |
 | **alp-pcb-toolkit** | PCB SPA'sı (`web/`, Vite + React 18, JS) | aktif |
 | **alp-comm-toolkit** | Comm SPA'sı (Vite + React 18, TS + Tailwind) | Faz 2'de doğacak |
 
@@ -76,6 +76,22 @@ Süit büyüdükçe monolitin dağılmaması bu üç kurala bağlı:
 Bir ürün ağır, CRUD-dışı bir backend isterse (gerçek zamanlı işleme, uzun süren hesap) o ürüne
 **sidecar servis** eklenir — aynı ters vekilin ve aynı JWT'nin arkasında. Kapı açık, bugün
 kapalı: hiçbir üründe böyle bir ihtiyaç yok.
+
+### Edge yönlendirme (Faz 4)
+
+Path tabanlı, tek alan adı: `/` landing (statik, `landing/`), `/pcb`, `/comm`, `/api` — hepsi
+`deploy/` içindeki `edge` (nginx) konteynerinin arkasında. `edge` vekillemeyi ŞEFFAF yapar,
+öneki SİLMEZ: `/pcb/x` isteği `pcb:80`'e AYNEN `/pcb/x` olarak gider. Bunun karşılığı olarak
+PCB/Comm'un KENDİ ürettiği HTML'in de `/pcb/…`/`/comm/…` köklü varlık yolları taşıması şart —
+aksi hâlde `/assets/…` isteği edge'in KÖKÜNDE (landing'de) 404 alır.
+
+**Go-live kapısı, henüz kapanmadı.** PCB ve Comm hâlâ "ben sitenin köküyüm" varsayımıyla
+derleniyor (Vite `base`, `BrowserRouter basename`, PCB'nin PWA manifest yolları, PCB'nin kendi
+`nginx.conf`'undaki önek farkındalığı) — bunlar KENDİ depolarında değişmeden `/pcb` ve `/comm`
+gerçek trafikte boş/bozuk açılır. alp-platform tarafı (edge, compose, landing) kuruldu ve
+smoke-test edildi; tam liste ve hangi depoda ne değişmesi gerektiği `deploy/README.md` →
+"Yönlendirme" bölümünde. Sunucu henüz yok, o yüzden bugün canlı regresyon riski yok — ama ilk
+gerçek dağıtımdan önce bu liste kapanmalı.
 
 ### Kimlik
 

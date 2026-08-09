@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ALP Suite</title>
+<meta name="description" content="ALP Suite — donanım mühendisleri için araç takımları. PCB Toolkit ve Comm Toolkit." />
+<meta name="robots" content="noindex" />
+<style>
+  /*
+    Token'lar @mcanbektas/design/src/tokens/{light,dark}.css'ten ELLE
+    kopyalandı (Faz 4 kararı: landing statik kalsın, build hattı kurulmasın).
+    Paket güncellenirse bu değerler otomatik senkron OLMAZ — elle karşılaştır.
+  */
+  :root,
+  [data-theme='light'] {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --raised: #ffffff;
+    --line: #e2e5ea;
+    --line-strong: #c7ccd4;
+    --text: #1a1d21;
+    --muted: #5b6270;
+    --accent: #2f5fd6;
+    --accent-dim: #4a74dd;
+    --accent-strong: #1f45a8;
+    --accent-soft: #e7ecfb;
+    --on-accent: #ffffff;
+    --shadow: 0 1px 2px rgba(20, 20, 30, 0.08);
+    --shadow-hover: 0 4px 12px rgba(20, 20, 30, 0.12);
+    --font-display: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --radius: 8px;
+    --radius-sm: 5px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --bg: #14161a;
+      --surface: #1c1f25;
+      --raised: #23272f;
+      --line: #2c313b;
+      --line-strong: #3c4250;
+      --text: #eceff3;
+      --muted: #9aa2b1;
+      --accent: #6f95ec;
+      --accent-dim: #5478d1;
+      --accent-strong: #9db6f2;
+      --accent-soft: #26314f;
+      --on-accent: #0d1526;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+      --shadow-hover: 0 6px 16px rgba(0, 0, 0, 0.5);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 20px;
+  }
+
+  main {
+    width: 100%;
+    max-width: 880px;
+    text-align: center;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(28px, 5vw, 40px);
+    margin: 0 0 12px;
+    letter-spacing: -0.01em;
+  }
+
+  p.tagline {
+    color: var(--muted);
+    font-size: 17px;
+    margin: 0 0 40px;
+  }
+
+  .products {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 20px;
+    text-align: left;
+  }
+
+  a.card {
+    display: block;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 24px;
+    text-decoration: none;
+    color: inherit;
+    box-shadow: var(--shadow);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+
+  a.card:hover,
+  a.card:focus-visible {
+    box-shadow: var(--shadow-hover);
+    border-color: var(--line-strong);
+  }
+
+  a.card .badge {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-strong);
+    background: var(--accent-soft);
+    border-radius: var(--radius-sm);
+    padding: 3px 8px;
+    margin-bottom: 12px;
+  }
+
+  a.card h2 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    margin: 0 0 8px;
+  }
+
+  a.card p {
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.5;
+    margin: 0 0 16px;
+  }
+
+  a.card .go {
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  footer {
+    margin-top: 48px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+  <main>
+    <h1>ALP Suite</h1>
+    <p class="tagline">Donanım mühendisleri için araç takımları.</p>
+
+    <div class="products">
+      <a class="card" href="/pcb/">
+        <span class="badge">PCB</span>
+        <h2>ALP PCB Toolkit</h2>
+        <p>İz genişliği, empedans, ısıl hesap ve daha fazlası — PCB tasarım hesap araçları.</p>
+        <span class="go">Aç →</span>
+      </a>
+
+      <a class="card" href="/comm/">
+        <span class="badge">Comm</span>
+        <h2>ALP Comm Toolkit</h2>
+        <p>Haberleşme protokolleri için kayıt kataloğu ve şema araçları.</p>
+        <span class="go">Aç →</span>
+      </a>
+    </div>
+
+    <footer>ALP Suite</footer>
+  </main>
+</body>
+</html>

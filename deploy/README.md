@@ -1,33 +1,79 @@
 # deploy/
 
-> **AYRIŞTIRMA NOTU (Faz 0).** Bu runbook tek ürünlü döneme aittir ve HENÜZ
-> UYGULANMADI — sunucu kurulmadı. Ayrıştırmadan sonra geçerli olmayan yerler:
-> depo yolu artık `/opt/alp-platform`, compose proje adı `alp-platform` (volume
-> önekleri `alp-platform_*`), imaj değişkenleri depo başına ayrıldı
-> (`PLATFORM_IMAGE_*` / `PCB_IMAGE_*`), `nginx.conf` bu depoda değil — PCB
-> SPA'sının deposuna taşındı (`web/nginx.conf`).
->
-> Runbook'un tamamı **Faz 4'te** (süit yüzü: landing + edge nginx + path
-> routing `/pcb` `/comm`) baştan yazılacak. O güne kadar buradaki adımlar
-> yönlendirici referanstır, birebir uygulanmaz.
+> **BİLİNEN ENGEL — go-live kapısı.** `/pcb` ve `/comm` path routing bu depoda
+> (Faz 4) kuruldu ve smoke-test edildi (edge → api, landing, sağlıklı 502
+> geri düşüşü), ama PCB ve Comm'un KENDİ depolarında bir önkoşul TAMAMLANMADI:
+> ikisi de hâlâ "ben sitenin köküyüm" varsayımıyla derleniyor (Vite `base`,
+> `BrowserRouter basename`, PCB'nin PWA manifest yolları). O değişmeden
+> `/pcb/` ve `/comm/` gerçek trafikte VARLIK 404'leriyle boş açılır. Ayrıntı
+> ve hangi depoda ne değişmesi gerekiyor: aşağıdaki "Yönlendirme" bölümü.
+> Sunucu henüz yok (bkz. altındaki not) — bu yüzden bugün canlı bir
+> regresyon riski YOK, ama ilk gerçek dağıtımdan önce bu kapı kapanmalı.
 
-Barındırma ve dağıtım yapılandırması. Servisler: `nginx` (ürün SPA'ları) + `api`
-(platform) + `postgres` + `seq`. Plan: `docs/uyelik-ve-rapor-plani.md` §7
+Barındırma ve dağıtım yapılandırması. Servisler: `edge` (nginx, süit kenarı) +
+`pcb` + `comm` (isteğe bağlı) + `api` (platform) + `postgres` + `seq`. PCB'nin
+ayrıştırma-öncesi kararlarının tarihçesi: `docs/uyelik-ve-rapor-plani.md` §7
 (alp-pcb-toolkit deposunda).
 
 | Dosya | Ne yapar |
 |---|---|
-| `docker-compose.yml` | Temel yığın. api'yi **yerelde derler**, ürün SPA'larını ghcr'dan çeker. |
-| `docker-compose.prod.yml` | Üretim örtüsü — `ghcr.io`'daki hazır imajları kullanır, TLS ve certbot ekler. |
+| `docker-compose.yml` | Temel yığın. api'yi **yerelde derler**, ürün SPA'larını ghcr'dan çeker, `edge`i resmi `nginx:alpine` imajıyla mount'lu config'le ayağa kaldırır. |
+| `docker-compose.prod.yml` | Üretim örtüsü — `ghcr.io`'daki hazır imajları kullanır, TLS ve certbot ekler (`edge`e taşındı). |
 | `docker-compose.pcb-local.yml` | PCB SPA'sını yerelde derlemek için örtü (kardeş dizin varsayar). |
-| `nginx.prod.conf.template` | Üretim: 80 → 443 yönlendirme, TLS, HSTS. `APP_DOMAIN` ile doldurulur. |
+| `docker-compose.comm-local.yml` | Aynı desen, Comm için — BUGÜN çalışmaz, alp-comm-toolkit henüz bir Dockerfile yayınlamıyor (yukarıdaki engel notu). |
+| `nginx.conf` | Yerel/TLS'siz edge yapılandırması — landing + `/pcb` + `/comm` + `/api` yönlendirmesi. |
+| `nginx.prod.conf.template` | Üretim: 80 → 443 yönlendirme, TLS, HSTS + aynı yönlendirme. `APP_DOMAIN` ile doldurulur. |
 | `.env.example` | Ortam değişkeni şablonu. Kopyası `.env` **depoya girmez**. |
 | `backup.sh` | Günlük `pg_dump` + saklama + sunucu dışına kopya. |
+| `../landing/` | Süitin karşılama sayfası (statik, build'siz) — `edge` doğrudan mount'lar. |
 
 **Yazı tipleri.** api imajı rapor yazı tiplerini `assets/report-fonts/` dizininden
 `/app/fonts` altına alır ve `Reports__FontsPath` oraya bakar (`docker-compose.yml`).
 Dizin boş kalırsa PDF konteyner tabanındaki `fonts-dejavu-core`'a düşer; api açılışta
 bunu uyarı olarak basar, doğrulama listesindeki günlük taraması onu yakalar.
+
+---
+
+## Yönlendirme (Faz 4)
+
+Path tabanlı: `/` landing, `/pcb` PCB Toolkit, `/comm` Comm Toolkit, `/api`
+platform API'si — hepsi TEK alan adından, tek `edge` konteynerinin arkasında.
+
+```
+İstemci ──▶ edge (nginx, 80/443)
+              ├─ /               → landing (statik dosya, edge'in kendi root'u)
+              ├─ /api/           → api:8080         (merkezi, tek yer)
+              ├─ /pcb/           → pcb:80           (PCB'nin kendi konteyneri)
+              └─ /comm/          → comm:80          (comm profili açıkken)
+```
+
+`edge` vekillemeyi ŞEFFAF yapar: `/pcb/arac/x` isteği `pcb:80`'e AYNEN
+`/pcb/arac/x` olarak gider, önek SİLİNMEZ (`deploy/nginx.conf`'taki
+"BİLİNEN ENGEL" notu). Bunun karşılığı olarak PCB/Comm konteynerlerinin KENDİ
+ürettiği HTML'in de `/pcb/...`/`/comm/...` köklü varlık yolları taşıması
+gerekir — aksi hâlde tarayıcı `/assets/...`i edge'in KÖKÜNDE arar, orada
+landing'in dosyaları durur, 404.
+
+**Bu depoda BİTTİ:** `edge` servisi, `nginx.conf`/`nginx.prod.conf.template`,
+`comm` servisi (profil, imaj yayınlanınca varsayılana alınır), landing
+sayfası. Hepsi smoke-test edildi (`docker compose up -d postgres seq api` +
+`edge` → `/api/health`, `/`, `/healthz`, `/pcb` yönlendirmesi ve upstream
+yokken temiz 502 — kırılan bir açılış değil).
+
+**Bu depoda BİTMEDİ (başka repo, ayrı iş):**
+
+| Depo | Değişmesi gereken | Bugünkü durum |
+|---|---|---|
+| alp-pcb-toolkit | `web/vite.config.js`: `base: '/'` → `/pcb/'` | Yok |
+| alp-pcb-toolkit | `web/src/App.jsx`: `<BrowserRouter>`e `basename="/pcb"` | Yok |
+| alp-pcb-toolkit | PWA manifest (`start_url`, `scope`, ikon yolları) `/pcb/` önekli | Yok |
+| alp-pcb-toolkit | `web/nginx.conf`: kendi `try_files`/`location` blokları `/pcb` önekini tanımalı (edge önek SİLMİYOR) | Yok |
+| alp-comm-toolkit | `vite.config.ts`: `base: '/'` → `/comm/'` | Yok (router zaten `BASE_URL`den okuyor — `AppRouter.tsx`, tek eksik bu) |
+| alp-comm-toolkit | Bir `web/Dockerfile` + yayınlanan imaj | Yok — Faz 2 olgunluğu |
+
+Bu satırlar tamamlanmadan `/pcb` ve `/comm`'u gerçek bir sunucuda açmayın —
+`App__FrontendBaseUrl` de (aşağıya bkz.) PCB `/pcb`'ye taşınana kadar KÖKÜ
+göstermeye devam etmeli, yoksa doğrulama postaları kırık bağlantı üretir.
 
 ---
 
@@ -43,7 +89,14 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Uygulama: <http://localhost:8080>
+Uygulama: <http://localhost:8080> (landing). `/pcb` bugün yukarıdaki engel
+yüzünden boş/bozuk açılır — PCB'yi denemek için kendi deposunda
+`npm run stack` kullanın (kökten, `/pcb` altında değil).
+
+`docker compose up` **Comm'u başlatmaz** (bilerek — `comm` servisi `profiles:
+[comm]` altında, imajı henüz yok). Comm için Comm kendi deposunda
+`npm run stack` ile koşar, `App__Products__comm__FrontendBaseUrl` üzerinden
+CORS'a tanıtılır (aşağıya bkz., ve `api/Alp.Api/Auth/ProductMail.cs`).
 
 ```bash
 docker compose logs -f api      # açılış, migration, e-posta günlükleri
@@ -74,9 +127,9 @@ Sunucu henüz yok; bu bölüm hazır olduğunda izlenecek sıradır.
 curl -fsSL https://get.docker.com | sh
 
 # Uygulama dizini
-sudo mkdir -p /opt/alp-pcb-toolkit
-sudo chown "$USER" /opt/alp-pcb-toolkit
-git clone https://github.com/mcanbektas/alp-pcb-toolkit.git /opt/alp-pcb-toolkit
+sudo mkdir -p /opt/alp-platform
+sudo chown "$USER" /opt/alp-platform
+git clone https://github.com/mcanbektas/alp-platform.git /opt/alp-platform
 ```
 
 DNS: `APP_DOMAIN` için A kaydı sunucunun IP'sine bakmalı. Sertifika alınmadan
@@ -88,7 +141,7 @@ yalnızca compose ağından erişilir, host'a port yayınlanmaz.
 ### 2. Ortam değişkenleri
 
 ```bash
-cd /opt/alp-pcb-toolkit/deploy
+cd /opt/alp-platform/deploy
 cp .env.example .env
 ```
 
@@ -99,11 +152,13 @@ cp .env.example .env
 | `POSTGRES_PASSWORD` | `openssl rand -base64 32` |
 | `JWT_KEY` | `openssl rand -base64 48` — **en az 32 bayt**, kısa anahtarla uygulama açılışta durur |
 | `APP_DOMAIN` | Alan adı, `https://` olmadan |
-| `FRONTEND_BASE_URL` | `https://<alan-adi>` — doğrulama/parola bağlantıları bundan üretilir |
+| `FRONTEND_BASE_URL` | `https://<alan-adi>` — PCB `/pcb`'ye taşınana kadar KÖKÜ gösterir, yukarıdaki "Yönlendirme" bölümüne bkz. |
+| `COMM_FRONTEND_BASE_URL` | Comm'un origin'i — Comm'un kendi imajı/dev sunucusu ayakta olduğunda doldurulur, aksi hâlde boş bırakılır |
 | `PLATFORM_IMAGE_PREFIX` | `ghcr.io/mcanbektas/alp-platform` — api imajı |
 | `PCB_IMAGE_PREFIX` | `ghcr.io/mcanbektas/alp-pcb-toolkit` — PCB SPA imajı |
-| `PLATFORM_IMAGE_TAG` / `PCB_IMAGE_TAG` | `latest` ya da `sha-<commit>`. **Ayrı ayrı** — ürünler bağımsız sürümlenir, birini geri almak ötekini etkilemez. |
-| `WEB_PORT` | Üretimde **80**. Örtü yalnızca 443'ü ekler; 80 temel dosyadan gelir. |
+| `COMM_IMAGE_PREFIX` | `ghcr.io/mcanbektas/alp-comm-toolkit` — Comm SPA imajı (henüz yayınlanmıyor) |
+| `PLATFORM_IMAGE_TAG` / `PCB_IMAGE_TAG` / `COMM_IMAGE_TAG` | `latest` ya da `sha-<commit>`. **Ayrı ayrı** — ürünler bağımsız sürümlenir, birini geri almak ötekini etkilemez. |
+| `WEB_PORT` | Üretimde **80**. Örtü yalnızca 443'ü ekler; 80 temel dosyadan gelir. Artık `edge`e bağlıdır. |
 | `SMTP_*` | **Zorunlu** — aşağıya bakın |
 | `CERTBOT_EMAIL` | Sertifika bildirimleri |
 | `ADMIN_EMAILS` | Yönetim panelini görecek hesapların e-postaları, virgülle ayrılır |
@@ -120,12 +175,14 @@ cp .env.example .env
 > gerekiyorsa önce `ADMIN_EMAILS`ten çıkarılır ve `api` yeniden başlatılır.
 
 > **Alan adı alınınca eklenecek:** `VITE_SITE_URL` henüz `.env`'de yok.
-> `web/scripts/build-sitemap.mjs` `dist/sitemap.xml`'i bu değişkenden üretir;
-> tanımsızken placeholder alan adıyla üretir ve uyarı basar. Alan adı
-> alınınca `.env`'e eklenir ve web derlemesine geçilir (`web/Dockerfile`'daki
-> `VITE_API_BASE_URL` notuyla aynı desen). `robots.txt`'teki `Sitemap:` satırı
-> göreli değil TAM url ister ve statik dosya olduğu için build zamanı
-> değişkeninden gelemez — o satır da aynı günde elle eklenir.
+> PCB'nin `web/scripts/build-sitemap.mjs`'i `dist/sitemap.xml`'i bu
+> değişkenden üretir; tanımsızken placeholder alan adıyla üretir ve uyarı
+> basar. Alan adı alınınca `.env`'e eklenir ve PCB web derlemesine geçilir
+> (`web/Dockerfile`'daki `VITE_API_BASE_URL` notuyla aynı desen).
+> `robots.txt`'teki `Sitemap:` satırı göreli değil TAM url ister ve statik
+> dosya olduğu için build zamanı değişkeninden gelemez — o satır da aynı
+> günde elle eklenir. PCB `/pcb` altına taşındığında bu URL'ler de öneki
+> almalı — yukarıdaki "Yönlendirme" bölümündeki iş listesinin bir parçası.
 
 > **SMTP olmadan canlıya çıkılmaz.** E-posta doğrulaması zorunludur
 > (`SignIn.RequireConfirmedEmail`); doğrulama postası gitmezse **hiçbir kullanıcı
@@ -138,22 +195,22 @@ TLS bloğu sertifika olmadan açılamaz, sertifika da 80 portundan doğrulama is
 bu yüzden sıra şudur: önce TLS'siz yığın, sonra sertifika, sonra üretim örtüsü.
 
 ```bash
-cd /opt/alp-pcb-toolkit/deploy
+cd /opt/alp-platform/deploy
 set -a; source .env; set +a
 
-# a) TLS'siz yığını kaldır (imajın gömülü nginx.conf'u 80'de servis eder)
+# a) TLS'siz yığını kaldır (edge 80'de landing/pcb/comm/api'yi servis eder)
 docker compose up -d
 
 # b) http-01 doğrulaması ile ilk sertifika
 docker run --rm \
-  -v alp-pcb-toolkit_certbot-conf:/etc/letsencrypt \
-  -v alp-pcb-toolkit_certbot-webroot:/var/www/certbot \
+  -v alp-platform_certbot-conf:/etc/letsencrypt \
+  -v alp-platform_certbot-webroot:/var/www/certbot \
   -p 80:80 certbot/certbot certonly --standalone \
   -d "$APP_DOMAIN" --email "$CERTBOT_EMAIL" --agree-tos --no-eff-email
 ```
 
-`--standalone` 80 portunu kendisi dinler, o yüzden b adımından önce web
-konteynerini durdurun (`docker compose stop web`).
+`--standalone` 80 portunu kendisi dinler, o yüzden b adımından önce edge
+konteynerini durdurun (`docker compose stop edge`).
 
 ### 4. Üretim yığını
 
@@ -171,7 +228,7 @@ derlemeye kalkar ve .NET derlemesi küçük bir VPS'i tüketir.
 Kolaylık için sunucuda takma ad:
 
 ```bash
-alias alp='docker compose -f /opt/alp-pcb-toolkit/deploy/docker-compose.yml -f /opt/alp-pcb-toolkit/deploy/docker-compose.prod.yml'
+alias alp='docker compose -f /opt/alp-platform/deploy/docker-compose.yml -f /opt/alp-platform/deploy/docker-compose.prod.yml'
 ```
 
 ### 5. Sertifika yenilemesi
@@ -180,13 +237,13 @@ alias alp='docker compose -f /opt/alp-pcb-toolkit/deploy/docker-compose.yml -f /
 kendiliğinden okumaz** — yeniden yüklenmesi gerekir. Cron:
 
 ```
-0 4 * * * docker compose -f /opt/alp-pcb-toolkit/deploy/docker-compose.yml -f /opt/alp-pcb-toolkit/deploy/docker-compose.prod.yml exec -T web nginx -s reload
+0 4 * * * docker compose -f /opt/alp-platform/deploy/docker-compose.yml -f /opt/alp-platform/deploy/docker-compose.prod.yml exec -T edge nginx -s reload
 ```
 
 ### 6. Yedekleme
 
 ```
-0 3 * * * /opt/alp-pcb-toolkit/deploy/backup.sh >> /var/log/alp-yedek.log 2>&1
+0 3 * * * /opt/alp-platform/deploy/backup.sh >> /var/log/alp-yedek.log 2>&1
 ```
 
 `.env` içine eklenebilir: `BACKUP_DIR`, `BACKUP_KEEP_DAYS` (varsayılan 14),
@@ -198,12 +255,12 @@ uyarı basar.
 Geri yükleme — üç adım, sırası önemli:
 
 ```bash
-cd /opt/alp-pcb-toolkit/deploy
+cd /opt/alp-platform/deploy
 set -a; source .env; set +a          # POSTGRES_USER / POSTGRES_DB buradan gelir
 docker compose stop api              # dump --clean ile DROP atar; canlı bağlantı
                                      # varken çakışır, açılan api migration'ı
                                      # yarım şemanın üstüne koşabilir
-gunzip -c /var/backups/alp-pcb-toolkit/alp-20260801-030000.sql.gz \
+gunzip -c /var/backups/alp-platform/alp-20260801-030000.sql.gz \
   | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 docker compose start api
 ```
@@ -212,8 +269,9 @@ docker compose start api
 
 ## Güncelleme ve geri alma
 
-`main`'e push → GitHub Actions testleri koşar, `api` ve `web` imajlarını derleyip
-`ghcr.io`'ya iter (`latest` + `sha-<commit>`). Sunucuda:
+`main`'e push → GitHub Actions testleri koşar, `api` imajını derleyip
+`ghcr.io`'ya iter (`latest` + `sha-<commit>`). PCB ve Comm imajları KENDİ
+depolarındaki CI'dan gelir, burada derlenmez. Sunucuda:
 
 ```bash
 alp pull && alp up -d --no-build
@@ -222,9 +280,13 @@ alp pull && alp up -d --no-build
 Geri alma — yeniden derleme yok, yalnızca etiket değişir:
 
 ```bash
-sed -i 's/^IMAGE_TAG=.*/IMAGE_TAG=sha-<eski-commit>/' .env
+sed -i 's/^PLATFORM_IMAGE_TAG=.*/PLATFORM_IMAGE_TAG=sha-<eski-commit>/' .env
 alp pull && alp up -d --no-build
 ```
+
+`landing/` ve `nginx*.conf*` imaja gömülü DEĞİL — bind mount'la okunur (bkz.
+`docker-compose.yml` → `edge`). Bu ikisini değiştirmek imaj derlemesi
+istemez, `git pull` + `alp up -d` yeter (nginx conf'u yeniden okur).
 
 **Dağıtımı otomatikleştirmek** (isteğe bağlı, sunucu hazır olduğunda):
 `.github/workflows/deploy.yml` içine `images` işinden sonra SSH ile bağlanan bir
@@ -242,16 +304,19 @@ veritabanında durur, panelden okunur). Aşağıdakiler yalnızca birincisi içi
 ```bash
 # Canlı takip (Ctrl+C ile çık)
 docker compose logs -f api
-docker compose logs -f web        # nginx erişim + hata günlüğü de burada —
-                                   # access.log/error.log imajda stdout/stderr'e
-                                   # symlink'tir, ayrıca `docker exec` gerekmez
+docker compose logs -f edge       # nginx erişim + hata günlüğü de burada —
+                                   # access.log/error.log resmi nginx imajında
+                                   # stdout/stderr'e symlink'tir, `docker exec`
+                                   # gerekmez. PCB/Comm'un KENDİ nginx günlüğü
+                                   # burada YOKTUR — onlar kendi servislerinde
+                                   # (`docker compose logs pcb` / `... comm`).
 
 # Son N dakika/saat — servis düşünce "ne olmuş" diye baştan taramak yerine
 docker compose logs --since 30m api
-docker compose logs --since 1h web
+docker compose logs --since 1h edge
 
 # Birden çok servis birlikte, zaman damgasıyla
-docker compose logs -f --timestamps api web
+docker compose logs -f --timestamps api edge
 ```
 
 **Üretimde** (`ASPNETCORE_ENVIRONMENT=Production`) api'nin konsol çıktısı
@@ -273,21 +338,20 @@ docker compose logs --no-log-prefix api | jq -R 'fromjson? // empty' \
   | jq 'select(.RequestPath? == "/api/auth/login")'
 ```
 
-**İstek korelasyonu** (docs/brifler/14-loglama-altyapi.md §2): nginx her isteğe
-`$request_id` üretir, `X-Request-Id` başlığıyla API'ye taşır; API kendi
-kimliğini üretmez, geleni AYNEN kullanır ve `RequestId` alanıyla (yukarıdaki
-`RequestPath` gibi, kökte) hem `/yonetim/loglar` panelinin ayrıntı kartına
-hem üretim JSON'una basar. Nginx `access.log`taki karşılığı `rid=` alanıdır
-(`log_format sorgusuz`). Bir isteğin nginx satırını ve API satırlarını yan
-yana okumak:
+**İstek korelasyonu** (docs/brifler/14-loglama-altyapi.md §2, alp-pcb-toolkit
+deposunda): `edge` her isteğe `$request_id` üretir, `X-Request-Id`
+başlığıyla API'ye taşır; API kendi kimliğini üretmez, geleni AYNEN kullanır ve
+`RequestId` alanıyla (yukarıdaki `RequestPath` gibi, kökte) hem
+`/yonetim/loglar` panelinin ayrıntı kartına hem üretim JSON'una basar. Nginx
+`access.log`taki karşılığı `rid=` alanıdır (`log_format sorgusuz`). Bir
+isteğin nginx satırını ve API satırlarını yan yana okumak:
 
 ```bash
-# Önce nginx access.log'undan kimliği bul (rid=... alanı satır sonunda) —
-# nginx'i taşıyan servisin adı `web`dir, `nginx` DEĞİL. `docker compose exec
-# web tail .../access.log` ÇALIŞMAZ: resmi nginx imajı access.log'u
-# /dev/stdout'a symlink'ler (review'da yakalandı, ilk taslak `exec`
-# kullanıyordu) — dosyadan değil, konteyner LOGUNDAN okunur.
-docker compose logs --no-log-prefix web | grep '/api/auth/login'
+# Önce edge'in access.log'undan kimliği bul (rid=... alanı satır sonunda).
+# `docker compose exec edge tail .../access.log` ÇALIŞMAZ: resmi nginx imajı
+# access.log'u /dev/stdout'a symlink'ler — dosyadan değil, konteyner
+# LOGUNDAN okunur.
+docker compose logs --no-log-prefix edge | grep '/api/auth/login'
 
 # Sonra o kimlikle API satırlarını süz
 docker compose logs --no-log-prefix api | jq -R 'fromjson? // empty' \
@@ -314,42 +378,44 @@ uygular.
 
 ## Doğrulama listesi
 
-Yeni bir sunucuda ilk açılışta sırayla:
+Yeni bir sunucuda ilk açılışta sırayla. **PCB/Comm satırları yukarıdaki
+"Bilinen engel" kapanana kadar 404/boş sayfa verir** — bu beklenen bir
+kırılmadır, engel notunun kendisi değil.
 
 ```bash
-curl -I https://<alan-adi>/                        # 200
-curl -I https://<alan-adi>/arac/trace-width        # 200 — 404 ise SPA geri düşüşü bozuk
-curl -I https://<alan-adi>/en/tool/trace-width     # 200 — İngilizce ağaç (prerender'lı)
-curl -I https://<alan-adi>/en                      # 200 — dist/en.html
+curl -I https://<alan-adi>/                        # 200 — landing
+curl -I https://<alan-adi>/pcb                     # 301 → /pcb/
+curl -I https://<alan-adi>/pcb/                    # 200 (engel kapanınca)
+curl -I https://<alan-adi>/comm                    # 301 → /comm/ (comm profili açıksa)
 curl -s  https://<alan-adi>/api/health             # {"status":"ok"}
 curl -s  https://<alan-adi>/api/health/ready       # {"status":"ready"} — veritabanı bağlantısı
-curl -s  https://<alan-adi>/healthz                # ok — nginx'in kendisi
+curl -s  https://<alan-adi>/healthz                # ok — edge'in kendisi
 docker compose logs api | grep -i "uyarı\|warn"    # SMTP / yazı tipi uyarıları
 ```
 
-Derin bağlantı denetimi ilk sıradadır: `BrowserRouter` kullanılıyor ve
-prerender'lanmamış bir rotanın (`/giris`, `/proje/…`) dosya karşılığı yok.
-`nginx.conf`'taki zincir
-`try_files $uri $uri.html $uri/index.html /spa-fallback.html /index.html` düşerse
-site ilk açılışta çalışır, **sayfa yenilendiğinde 404 verir**. Zincirin her
-parçasının gerekçesi ölçülmüştür — `docs/prerender-karari.md` §6.
-
-İngilizce satırlar aynı zinciri sınar: `/en/tool/trace-width` isteği
-`dist/en/tool/trace-width.html` dosyasına, `/en` ise `dist/en.html`e düşer
-(`$uri.html` adımı). Yönlendirme görülmemeli — sitemap'teki URL'ler eğik
-çizgisizdir.
-
-`VITE_SITE_URL` ayarlanmadan derlenmiş bir `dist/` yalnız `sitemap.xml`de değil,
-76 sayfanın `<head>`indeki `canonical` ve `hreflang` etiketlerinde de placeholder
-alan adı taşır. Kontrol:
+PCB engel kapandıktan sonra derin bağlantı denetimi ilk sıradadır:
+`BrowserRouter` kullanılıyor ve prerender'lanmamış bir rotanın
+(`/pcb/giris`, `/pcb/proje/…`) dosya karşılığı yok. PCB'nin KENDİ
+`nginx.conf`'undaki `try_files` zinciri düşerse `/pcb/` ilk açılışta çalışır,
+**sayfa yenilendiğinde 404 verir** — bu artık `edge`in değil PCB
+konteynerinin sorumluluğu.
 
 ```bash
-curl -s https://<alan-adi>/arac/trace-width | grep -o 'rel="canonical"[^>]*'
-curl -s https://<alan-adi>/sitemap.xml | head -6
+curl -I https://<alan-adi>/pcb/arac/trace-width     # 200 — 404 ise PCB'nin kendi geri düşüşü bozuk
+curl -s https://<alan-adi>/pcb/arac/trace-width | grep -o 'rel="canonical"[^>]*'
 ```
+
+`VITE_SITE_URL` ayarlanmadan derlenmiş bir PCB `dist/`i yalnız
+`sitemap.xml`'de değil, sayfaların `<head>`indeki `canonical` ve `hreflang`
+etiketlerinde de placeholder alan adı taşır — yukarıdaki `canonical`
+kontrolü bunu yakalar.
 
 ## Bilinen eksikler
 
+- **PCB/Comm base-path — go-live kapısı.** Yukarıdaki "Yönlendirme"
+  bölümündeki iş listesi tamamlanmadan `/pcb` ve `/comm` gerçek trafikte
+  çalışmaz. `edge`in kendisi doğru kuruldu ve test edildi; eksik olan iki
+  ürünün KENDİ derlemesi.
 - **Migration açılışta uygulanır** (`Database__MigrateOnStartup=true`). Tek
   kopyalı dağıtımda doğru; api birden çok kopyaya çıkarsa kapatılıp ayrı bir
   migration adımına taşınır.
@@ -358,5 +424,5 @@ curl -s https://<alan-adi>/sitemap.xml | head -6
   (içerik adresli, kullanıcı başına). Sınır `App__SnapshotQuotaBytes`
   (varsayılan 100 MB/kullanıcı) ve aşıldığında rapor reddedilmez, en eski
   snapshot'lar düşürülür. Postgres yedeğinin boyutu bu tablonun toplamı kadar
-  büyür — `docs/rapor-snapshot-karari.md` §2.
+  büyür — `docs/rapor-snapshot-karari.md` §2 (alp-pcb-toolkit deposunda).
 - **Sunucu tarafı otomatik dağıtım yok** — yukarıya bakın.

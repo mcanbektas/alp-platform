@@ -12,7 +12,7 @@
 # Başka bir yerdeyse aşağıdaki `context` yolu ona göre değiştirilir.
 
 services:
-  web:
+  pcb:
     build:
       # SPA deposunun kökü: Dockerfile hem web/ kaynağını hem web/nginx.conf'u
       # oradan alır.

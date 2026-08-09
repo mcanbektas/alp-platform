@@ -1,4 +1,5 @@
-# Temel yığın: postgres + api + nginx(web). İmajları YERELDE derler.
+# Temel yığın: postgres + api + edge (nginx, süit kenarı) + pcb (+ isteğe
+# bağlı comm). api'yi YERELDE derler, ürün SPA'larını ghcr'dan çeker.
 #
 # Kullanım (bu dizinden):
 #   cp .env.example .env   ve içindeki değerleri doldur
@@ -159,9 +160,14 @@ services:
     networks:
       - alpnet
 
-  web:
+  pcb:
     # PCB SPA'sı BU DEPODA DEĞİL — kendi deposunda yaşar ve kendi imajını
     # ghcr.io'ya iter (mcanbektas/alp-pcb-toolkit). Burada hazır imaj çekilir.
+    #
+    # Faz 4 öncesi bu servisin adı `web` idi ve dışarıya doğrudan port açardı
+    # (kendi nginx'i süitin tek girişiydi). Artık girişi `edge` üstlendi; bu
+    # konteyner ağ İÇİNDE kalır, host'a port YAYINLAMAZ (aşağıda `ports:` yok
+    # — kasıtlı, edge'in `/pcb/` bloğu buraya vekiller).
     #
     # SPA'yı yerelde derleyerek denemek için pcb-local örtüsü eklenir (iki depo
     # kardeş dizinlerde duruyorsa çalışır):
@@ -178,8 +184,69 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    networks:
+      - alpnet
+
+  # Comm SPA'sı — alp-comm-toolkit henüz Faz 2 olgunluğunda ve BİR İMAJ
+  # YAYINLAMIYOR (Dockerfile'ı yok). `profiles: [comm]` bilerek: bu servis
+  # `docker compose up` içinde varsayılan olarak BAŞLAMAZ — imajı olmayan bir
+  # servisi zorunlu kılmak, PCB-tek dünyadaki herkesin `docker compose up`unu
+  # kırardı (ghcr'dan çekilemeyen imaj → pull hatası). İmaj yayınlanınca ya
+  # profili kaldırıp varsayılana alınır ya da `docker compose --profile comm
+  # up -d` ile açıkça istenir. Yerelde derleyerek denemek için comm-local
+  # örtüsü (pcb-local ile aynı desen): docker-compose.comm-local.yml.
+  comm:
+    profiles: ["comm"]
+    image: ${COMM_IMAGE_PREFIX:-ghcr.io/mcanbektas/alp-comm-toolkit}/web:${COMM_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    cpus: 0.5
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - alpnet
+
+  # Süit kenarı — TEK dış giriş. Landing'i (statik) doğrudan sunar, `/pcb` ve
+  # `/comm`'u kendi konteynerlerine vekiller, `/api`'yi merkezde tek yerden
+  # api'ye vekiller. Faz 4 öncesi bu iş `web`(PCB) konteynerinin kendi
+  # gömülü nginx'indeydi — artık ayrı, ürün-bağımsız bir servis.
+  #
+  # Resmi `nginx:alpine` imajı YETERLİ — özel bir Dockerfile'a gerek yok:
+  # yapılandırma ve landing'in statik dosyaları salt-okunur bind mount'la
+  # taşınır (aşağıdaki volumes). Bir image derlemek yerine mount kullanmak,
+  # landing içeriğini ya da nginx kuralını değiştirmenin `git pull` + `docker
+  # compose up -d` kadar basit kalmasını sağlar — image rebuild gerekmez
+  # (nginx.prod.conf.template zaten aynı desenle çalışıyordu).
+  edge:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    cpus: 0.5
+    depends_on:
+      api:
+        condition: service_healthy
+      pcb:
+        condition: service_started
     ports:
       - "${WEB_PORT:-8080}:80"
+    volumes:
+      # Hedef `templates/` altıdır, `conf.d/default.conf` DEĞİL — bilerek:
+      # resmi nginx imajının giriş noktası `templates/*.template`i her
+      # açılışta envsubst'tan geçirip aynı `conf.d/default.conf`'u YAZAR.
+      # Hedef doğrudan `conf.d/default.conf` olsaydı bu dosya salt-okunur
+      # bind mount olurdu ve docker-compose.prod.yml örtüsü aynı hedefe
+      # nginx.prod.conf.template'i bağlayınca (aynı desen, prod override
+      # kazanır) giriş noktası salt-okunur dosyanın ÜSTÜNE yazmaya çalışıp
+      # açılışta patlardı. `nginx.conf`'ta `${...}` biçiminde OS ortam
+      # değişkeni YOK (yalnızca `$request_uri` gibi nginx'in KENDİ çalışma
+      # zamanı değişkenleri var) — envsubst yalnızca gerçekten TANIMLI OS
+      # değişkenlerini değiştirir (nginx.prod.conf.template'teki aynı notla
+      # aynı gerekçe), yani dosya buradan byte-aynı geçer.
+      - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - ../landing:/usr/share/nginx/html:ro
     networks:
       - alpnet
 

@@ -8,24 +8,35 @@
 # Amaç sunucunun derleme yapmaması — .NET derlemesi küçük bir VPS'i tüketir.
 #
 # Gerekli ek ortam değişkenleri (.env): APP_DOMAIN, PLATFORM_IMAGE_PREFIX,
-# PLATFORM_IMAGE_TAG. Ürün SPA'larının imaj değişkenleri (PCB_IMAGE_*) temel
-# dosyada okunur — ürünler bağımsız sürümlenir, tek bir IMAGE_TAG hepsini
-# birden etiketleyemez.
+# PLATFORM_IMAGE_TAG. Ürün SPA'larının imaj değişkenleri (PCB_IMAGE_*,
+# COMM_IMAGE_*) temel dosyada okunur — ürünler bağımsız sürümlenir, tek bir
+# IMAGE_TAG hepsini birden etiketleyemez.
 
 services:
   api:
     image: ${PLATFORM_IMAGE_PREFIX:-ghcr.io/mcanbektas/alp-platform}/api:${PLATFORM_IMAGE_TAG:-latest}
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      # Aynı köken üzerinden servis edildiği için CORS fiilen devrede değil;
-      # yine de doğru alan adı verilir — doğrulama/parola bağlantıları da
-      # bu değerden üretilir (AuthEndpoints.FrontendBaseUrl).
+      # BİLİNEN ENGEL (nginx.conf'taki "BİLİNEN ENGEL" notuyla aynı): PCB
+      # kendi `base`'ini `/pcb/`ye çevirmeden bu değer KÖKÜ göstermeye devam
+      # eder — PCB'nin doğrulama/parola bağlantıları hâlâ kökten üretilir
+      # (`/e-posta-dogrula`, PCB kendi kökten servis ediliyormuş GİBİ).
+      # PCB `/pcb` altına gerçekten taşındığında bu `https://${APP_DOMAIN}/pcb`
+      # olarak güncellenir — o güne kadar erken değiştirmek TERSİNE bozar
+      # (PCB henüz `/pcb/e-posta-dogrula` diye bir rota sunmuyor).
       App__FrontendBaseUrl: https://${APP_DOMAIN}
+      # Comm için karşılığı henüz YOK: Comm'un kendi imajı yayınlanıp `/comm`
+      # altında gerçekten çalışır hâle gelene dek bilerek boş bırakılır —
+      # ProductMail dolu değilse localhost varsayılanına düşer (yalnız
+      # geliştirmede anlamlı), üretimde Comm mail'i devreye girmez ama PCB
+      # etkilenmez. O gün: App__Products__comm__FrontendBaseUrl: https://${APP_DOMAIN}/comm
 
-  web:
-    # İmaj adı temel dosyada (PCB_IMAGE_PREFIX/PCB_IMAGE_TAG) — burada
-    # tekrarlanmaz, yoksa iki yerde ayrı ayrı güncellenmesi gereken bir kopya
-    # doğar. Burada yalnız üretime özgü ayarlar durur.
+  # Süit kenarı — TLS burada sonlanır, PCB'nin eski `web` override'ının
+  # (APP_DOMAIN, 443, nginx template, certbot mount'ları) tamamı BURAYA
+  # taşındı. PCB artık edge'in ARKASINDA, ağ içi bir upstream — kendi
+  # üretim-özel ayarına ihtiyacı kalmadı (temel dosyadaki `pcb:` servisi
+  # değişmeden kullanılır).
+  edge:
     environment:
       # nginx imajının giriş noktası templates/ altını envsubst'tan geçirip
       # conf.d/default.conf olarak yazar — imaja gömülü TLS'siz varsayılanın
