@@ -1,0 +1,28 @@
+name: CI
+
+# main'e push'ta ve her PR'da koşar. PR'sız yan dallar CI görmez — kural PR
+# üzerinden merge; doğrudan main push'u da (bu depoda olağan yol) kapsanır.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: api — test + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+      - run: dotnet restore api/Alp.Api.sln
+      - run: dotnet build api/Alp.Api.sln -c Release --no-restore
+      # Sunucu kuralları (rapor önizlemesi, SVG kapısı, logo türü, ad tekliği,
+      # sahiplik) testten geçmeden ileri gidilmez. Veritabanı servisi gerekmez:
+      # testler bellek içi SQLite kurar, bkz. Alp.Api.Tests/TestHost.cs
+      - run: dotnet test api/Alp.Api.sln -c Release --no-build --verbosity minimal

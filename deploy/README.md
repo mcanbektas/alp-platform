@@ -1,13 +1,25 @@
 # deploy/
 
-Barındırma ve dağıtım yapılandırması. Üç servis: `nginx` (web) + `api` + `postgres`.
-Plan: `docs/uyelik-ve-rapor-plani.md` §7.
+> **AYRIŞTIRMA NOTU (Faz 0).** Bu runbook tek ürünlü döneme aittir ve HENÜZ
+> UYGULANMADI — sunucu kurulmadı. Ayrıştırmadan sonra geçerli olmayan yerler:
+> depo yolu artık `/opt/alp-platform`, compose proje adı `alp-platform` (volume
+> önekleri `alp-platform_*`), imaj değişkenleri depo başına ayrıldı
+> (`PLATFORM_IMAGE_*` / `PCB_IMAGE_*`), `nginx.conf` bu depoda değil — PCB
+> SPA'sının deposuna taşındı (`web/nginx.conf`).
+>
+> Runbook'un tamamı **Faz 4'te** (süit yüzü: landing + edge nginx + path
+> routing `/pcb` `/comm`) baştan yazılacak. O güne kadar buradaki adımlar
+> yönlendirici referanstır, birebir uygulanmaz.
+
+Barındırma ve dağıtım yapılandırması. Servisler: `nginx` (ürün SPA'ları) + `api`
+(platform) + `postgres` + `seq`. Plan: `docs/uyelik-ve-rapor-plani.md` §7
+(alp-pcb-toolkit deposunda).
 
 | Dosya | Ne yapar |
 |---|---|
-| `docker-compose.yml` | Temel yığın. İmajları **yerelde derler**. |
+| `docker-compose.yml` | Temel yığın. api'yi **yerelde derler**, ürün SPA'larını ghcr'dan çeker. |
 | `docker-compose.prod.yml` | Üretim örtüsü — `ghcr.io`'daki hazır imajları kullanır, TLS ve certbot ekler. |
-| `nginx.conf` | TLS'siz sunum: SPA geri düşüşü + `/api` ters vekili. Web imajına gömülüdür. |
+| `docker-compose.pcb-local.yml` | PCB SPA'sını yerelde derlemek için örtü (kardeş dizin varsayar). |
 | `nginx.prod.conf.template` | Üretim: 80 → 443 yönlendirme, TLS, HSTS. `APP_DOMAIN` ile doldurulur. |
 | `.env.example` | Ortam değişkeni şablonu. Kopyası `.env` **depoya girmez**. |
 | `backup.sh` | Günlük `pg_dump` + saklama + sunucu dışına kopya. |
@@ -88,8 +100,9 @@ cp .env.example .env
 | `JWT_KEY` | `openssl rand -base64 48` — **en az 32 bayt**, kısa anahtarla uygulama açılışta durur |
 | `APP_DOMAIN` | Alan adı, `https://` olmadan |
 | `FRONTEND_BASE_URL` | `https://<alan-adi>` — doğrulama/parola bağlantıları bundan üretilir |
-| `IMAGE_PREFIX` | `ghcr.io/mcanbektas/alp-pcb-toolkit` |
-| `IMAGE_TAG` | `latest` ya da `sha-<commit>` |
+| `PLATFORM_IMAGE_PREFIX` | `ghcr.io/mcanbektas/alp-platform` — api imajı |
+| `PCB_IMAGE_PREFIX` | `ghcr.io/mcanbektas/alp-pcb-toolkit` — PCB SPA imajı |
+| `PLATFORM_IMAGE_TAG` / `PCB_IMAGE_TAG` | `latest` ya da `sha-<commit>`. **Ayrı ayrı** — ürünler bağımsız sürümlenir, birini geri almak ötekini etkilemez. |
 | `WEB_PORT` | Üretimde **80**. Örtü yalnızca 443'ü ekler; 80 temel dosyadan gelir. |
 | `SMTP_*` | **Zorunlu** — aşağıya bakın |
 | `CERTBOT_EMAIL` | Sertifika bildirimleri |

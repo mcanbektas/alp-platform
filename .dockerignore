@@ -1,0 +1,23 @@
+# Derleme bağlamı depo köküdür (`docker build -f api/Dockerfile .`): api/
+# kaynağı ve assets/report-fonts/ aynı imajda buluşur. Kökteki ağır ve gizli
+# dizinler burada elenir.
+.git
+.github
+.claude
+**/bin
+**/obj
+**/.DS_Store
+**/*.user
+
+# Sırlar imaja hiç girmez
+deploy/.env
+deploy/*.env
+**/appsettings.Development.json
+**/appsettings.Production.json
+
+# Üretilmiş raporlar / Data Protection anahtarları
+api/Alp.Api/App_Data
+
+# Testler imaja girmez: imaj yalnız uygulama projesini yayımlıyor, test
+# kaynağı bağlamda dursa da hiç derlenmez. CI ayrı bir adımda koşturuyor.
+api/Alp.Api.Tests

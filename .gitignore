@@ -1,0 +1,15 @@
+# .NET
+bin/
+obj/
+*.user
+appsettings.*.json
+!appsettings.json
+!appsettings.Development.json.example
+api/Alp.Api/App_Data/
+
+# deploy — gizli değerler depoya girmez
+deploy/.env
+deploy/*.env
+
+.DS_Store
+*.local

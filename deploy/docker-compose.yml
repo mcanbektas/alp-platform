@@ -9,7 +9,13 @@
 # ghcr.io'daki hazır imajları kullanır — sunucu derleme yapmaz.
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
-name: alp-pcb-toolkit
+# Compose proje adı — volume ve konteyner adlarının öneki. Ayrıştırmada
+# `alp-pcb-toolkit`ten değişti (yığın artık tek ürünün değil, süitin).
+# YEREL VOLUME UYARISI: eski adla oluşmuş `alp-pcb-toolkit_pgdata` ve
+# `alp-pcb-toolkit_reports` volume'ları BU YIĞINA BAĞLANMAZ — yerelde durduran
+# test verisi varsa `docker volume` ile elle taşınır. Sunucu henüz kurulmadığı
+# için üretim verisi etkilenmez.
+name: alp-platform
 
 # Docker'ın varsayılan json-file sürücüsü SINIRSIZDIR: log dosyası konteyner
 # yaşadıkça büyür ve küçük bir diskte en olası ilk kesinti buydu. Her servis
@@ -149,15 +155,16 @@ services:
       - alpnet
 
   web:
-    build:
-      context: ..
-      dockerfile: web/Dockerfile
-      args:
-        # DERLEME zamanı değeri: sitemap.xml ve sayfaların canonical/hreflang
-        # etiketleri statik dosyalara yazılır, çalışma zamanında değiştirilemez.
-        # Boşsa placeholder alan adı yazılır ve derleme uyarı basar.
-        # Değeri değiştirdikten sonra `--build` şart.
-        VITE_SITE_URL: ${VITE_SITE_URL:-}
+    # PCB SPA'sı BU DEPODA DEĞİL — kendi deposunda yaşar ve kendi imajını
+    # ghcr.io'ya iter (mcanbektas/alp-pcb-toolkit). Burada hazır imaj çekilir.
+    #
+    # SPA'yı yerelde derleyerek denemek için pcb-local örtüsü eklenir (iki depo
+    # kardeş dizinlerde duruyorsa çalışır):
+    #   docker compose -f docker-compose.yml -f docker-compose.pcb-local.yml up -d --build
+    #
+    # Günlük geliştirmede bu yığın GEREKMEZ: SPA kendi deposunda `npm run stack`
+    # ile koşar ve /api'yi buradaki api servisine vekiller.
+    image: ${PCB_IMAGE_PREFIX:-ghcr.io/mcanbektas/alp-pcb-toolkit}/web:${PCB_IMAGE_TAG:-latest}
     restart: unless-stopped
     logging: *default-logging
     # Statik dosya + ters vekil — nginx'e bu kadarı bol bile.

@@ -7,11 +7,14 @@
 # (Compose birleştirmede anahtar silinemez), o yüzden derleme açıkça kapatılır.
 # Amaç sunucunun derleme yapmaması — .NET derlemesi küçük bir VPS'i tüketir.
 #
-# Gerekli ek ortam değişkenleri (.env): APP_DOMAIN, IMAGE_TAG, IMAGE_PREFIX.
+# Gerekli ek ortam değişkenleri (.env): APP_DOMAIN, PLATFORM_IMAGE_PREFIX,
+# PLATFORM_IMAGE_TAG. Ürün SPA'larının imaj değişkenleri (PCB_IMAGE_*) temel
+# dosyada okunur — ürünler bağımsız sürümlenir, tek bir IMAGE_TAG hepsini
+# birden etiketleyemez.
 
 services:
   api:
-    image: ${IMAGE_PREFIX}/api:${IMAGE_TAG:-latest}
+    image: ${PLATFORM_IMAGE_PREFIX:-ghcr.io/mcanbektas/alp-platform}/api:${PLATFORM_IMAGE_TAG:-latest}
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       # Aynı köken üzerinden servis edildiği için CORS fiilen devrede değil;
@@ -20,7 +23,9 @@ services:
       App__FrontendBaseUrl: https://${APP_DOMAIN}
 
   web:
-    image: ${IMAGE_PREFIX}/web:${IMAGE_TAG:-latest}
+    # İmaj adı temel dosyada (PCB_IMAGE_PREFIX/PCB_IMAGE_TAG) — burada
+    # tekrarlanmaz, yoksa iki yerde ayrı ayrı güncellenmesi gereken bir kopya
+    # doğar. Burada yalnız üretime özgü ayarlar durur.
     environment:
       # nginx imajının giriş noktası templates/ altını envsubst'tan geçirip
       # conf.d/default.conf olarak yazar — imaja gömülü TLS'siz varsayılanın
