@@ -1,0 +1,75 @@
+/* Koyu tema — aynı semantik token seti, light.css ile bire bir aynı isimler.
+   Seçim mekanizması: <html data-theme="dark">. Attribute yoksa ve sistem koyu
+   tercihliyse prefers-color-scheme devreye girer (aşağıdaki media blok). */
+[data-theme='dark'] {
+  --bg: #14161a;
+  --surface: #1c1f25;
+  --raised: #23272f;
+  --line: #2c313b;
+  --line-strong: #3c4250;
+
+  --text: #eceff3;
+  --muted: #9aa2b1;
+
+  --accent: #6f95ec;
+  --accent-dim: #5478d1;
+  --accent-strong: #9db6f2;
+  --accent-soft: #26314f;
+  --on-accent: #0d1526;
+
+  --warn: #d9a441;
+  --warn-soft: #3a2f14;
+  --danger: #e2605f;
+  --danger-soft: #3a1c1c;
+  --danger-strong: #f08a89;
+  --on-danger: #2a0d0d;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-hover: 0 6px 16px rgba(0, 0, 0, 0.5);
+
+  --series-1: #6f95ec;
+  --series-2: #4fd499;
+  --series-3: #e0b64f;
+  --series-4: #d17ae0;
+
+  --font-display: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-body: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #14161a;
+    --surface: #1c1f25;
+    --raised: #23272f;
+    --line: #2c313b;
+    --line-strong: #3c4250;
+
+    --text: #eceff3;
+    --muted: #9aa2b1;
+
+    --accent: #6f95ec;
+    --accent-dim: #5478d1;
+    --accent-strong: #9db6f2;
+    --accent-soft: #26314f;
+    --on-accent: #0d1526;
+
+    --warn: #d9a441;
+    --warn-soft: #3a2f14;
+    --danger: #e2605f;
+    --danger-soft: #3a1c1c;
+    --danger-strong: #f08a89;
+    --on-danger: #2a0d0d;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-hover: 0 6px 16px rgba(0, 0, 0, 0.5);
+
+    --series-1: #6f95ec;
+    --series-2: #4fd499;
+    --series-3: #e0b64f;
+    --series-4: #d17ae0;
+  }
+}
