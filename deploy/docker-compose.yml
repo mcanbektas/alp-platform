@@ -187,11 +187,12 @@ services:
     networks:
       - alpnet
 
-  # Comm SPA'sı — alp-comm-toolkit henüz Faz 2 olgunluğunda ve BİR İMAJ
-  # YAYINLAMIYOR (Dockerfile'ı yok). `profiles: [comm]` bilerek: bu servis
-  # `docker compose up` içinde varsayılan olarak BAŞLAMAZ — imajı olmayan bir
-  # servisi zorunlu kılmak, PCB-tek dünyadaki herkesin `docker compose up`unu
-  # kırardı (ghcr'dan çekilemeyen imaj → pull hatası). İmaj yayınlanınca ya
+  # Comm SPA'sı — alp-comm-toolkit artık bir `web/Dockerfile` yayınlıyor ama
+  # CI'ında henüz ghcr'a imaj iten bir adım yok (PCB'deki `images.yml`in
+  # karşılığı yazılmadı). `profiles: [comm]` bilerek: bu servis `docker
+  # compose up` içinde varsayılan olarak BAŞLAMAZ — imajı olmayan bir servisi
+  # zorunlu kılmak, PCB-tek dünyadaki herkesin `docker compose up`unu kırardı
+  # (ghcr'dan çekilemeyen imaj → pull hatası). İmaj yayını kurulunca ya
   # profili kaldırıp varsayılana alınır ya da `docker compose --profile comm
   # up -d` ile açıkça istenir. Yerelde derleyerek denemek için comm-local
   # örtüsü (pcb-local ile aynı desen): docker-compose.comm-local.yml.

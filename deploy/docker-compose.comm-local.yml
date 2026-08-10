@@ -5,20 +5,25 @@
 #   docker compose -f docker-compose.yml -f docker-compose.comm-local.yml \
 #     --profile comm up -d --build
 #
-# BUGÜN ÇALIŞMAZ: alp-comm-toolkit henüz Faz 2 olgunluğunda ve bir
-# `web/Dockerfile` YAYINLAMIYOR (bkz. o depodaki CLAUDE.md). Bu dosya, o
-# depo Dockerfile'ını ekleyince tek satır değişmeden çalışacak şekilde,
-# pcb-local.yml'in simetriği olarak önden yazıldı — "compose süit düzeni"
-# kapsamı bunu istiyor, ama test edilemedi (bkz. deploy/README.md → "Bilinen
-# engel").
+# alp-comm-toolkit artık bir `web/Dockerfile` yayınlıyor (Faz 2 borcu kapandı).
 #
-# ÖN KOŞUL: iki depo kardeş dizinlerde durmalı —
+# ÖN KOŞUL: ÜÇ dizin kardeş olmalı —
 #   <bir dizin>/alp-platform       (bu depo)
 #   <bir dizin>/alp-comm-toolkit   (SPA)
-# Başka bir yerdeyse aşağıdaki `context` yolu ona göre değiştirilir.
-
+# Başka bir yerdeyse hem `context` hem `additional_contexts` yolu ona göre
+# değiştirilir.
+#
+# `additional_contexts`: Comm, @mcanbektas/design'ı henüz GitHub Packages'tan
+# değil `file:../alp-platform/design` ile alıyor (paket yayınlanmadı — o
+# depodaki CLAUDE.md → "Bilinen borçlar"). Docker'ın build context'i TEK
+# dizinle sınırlı olduğu için design paketi ayrı bir isimli context olarak
+# veriliyor; Dockerfile içinde `COPY --from=alp-platform-design …` ile
+# okunuyor. Paket yayınlanınca (Faz 4) bu satır ve Dockerfile'daki design
+# derleme aşaması birlikte düşer.
 services:
   comm:
     build:
       context: ../../alp-comm-toolkit
       dockerfile: web/Dockerfile
+      additional_contexts:
+        alp-platform-design: ../../alp-platform/design
