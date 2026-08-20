@@ -8,10 +8,17 @@ ALP ürün süitinin ortak sırtı: kimlik, veritabanı, rapor üretimi ve dağ�
 | **api** — ASP.NET Core 9, Identity + JWT, EF Core, PDF/Excel rapor | bu depo, `api/` |
 | **deploy** — Docker Compose (postgres + api + ürün SPA'ları + seq), nginx, certbot | bu depo, `deploy/` |
 | **PCB Toolkit** — PCB mühendislik hesap araçları (SPA) | [alp-pcb-toolkit](https://github.com/mcanbektas/alp-pcb-toolkit) |
-| **Comm Toolkit** — haberleşme protokolü analiz platformu (SPA) | alp-comm-toolkit *(planlandı)* |
+| **Comm Toolkit** — haberleşme protokolü analiz platformu (SPA) | [alp-comm-toolkit](https://github.com/mcanbektas/alp-comm-toolkit) |
+| **SIM-IT Aerospace** — İHA/roket tasarım ve uçuş verisi doğrulama (SPA) | alp-aerospace *(süite bağlanmadı — bkz. aşağıdaki not)* |
+| **SIM-IT SystemLab** — blok tabanlı sistem simülasyonu (SPA) | [alp-systemlab](https://github.com/mcanbektas/alp-systemlab) *(süite bağlanmadı)* |
 
 Tek hesap, tek alan adı, tek veritabanı, tek deploy; ürünler bağımsız depolarda ve bağımsız
 sürümlerle. Tek api servisi, ürün başına feature klasörü — mikroservis değil, modüler monolit.
+
+**"Süite bağlanmadı" ne demek:** o ürünün SPA'sı çalışıyor ama bu depoda bir feature
+klasörü, DB şeması, CORS kaydı ve nginx yolu YOK. Tarayıcıda kendi başına koşuyor
+(IndexedDB/localStorage), platformun kimliğini ve veritabanını kullanmıyor. `pcb` ve
+`comm` bağlandı; `aerospace` ve `systemlab` bağlanmadı.
 
 ## Hızlı başlangıç
 

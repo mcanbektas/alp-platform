@@ -3,9 +3,10 @@
 > **BİLİNEN ENGEL — go-live kapısı.** `/pcb` ve `/comm` path routing bu depoda
 > (Faz 4) kuruldu ve smoke-test edildi (edge → api, landing, sağlıklı 502
 > geri düşüşü), ama PCB ve Comm'un KENDİ depolarında bir önkoşul TAMAMLANMADI:
-> ikisi de hâlâ "ben sitenin köküyüm" varsayımıyla derleniyor (Vite `base`,
-> `BrowserRouter basename`, PCB'nin PWA manifest yolları). O değişmeden
-> `/pcb/` ve `/comm/` gerçek trafikte VARLIK 404'leriyle boş açılır. Ayrıntı
+> **Comm bunu kapattı** (`base: '/comm/'` + `basename={import.meta.env.BASE_URL}`).
+> **PCB kapatmadı:** düzeltme `fix/pcb-suit-base-path` dalında hazır (`75626c1`)
+> ama `main`e alınmadı; `main` hâlâ `base: '/'` ile derliyor. O dal birleşmeden
+> `/pcb/` gerçek trafikte VARLIK 404'leriyle boş açılır. Ayrıntı
 > ve hangi depoda ne değişmesi gerekiyor: aşağıdaki "Yönlendirme" bölümü.
 > Sunucu henüz yok (bkz. altındaki not) — bu yüzden bugün canlı bir
 > regresyon riski YOK, ama ilk gerçek dağıtımdan önce bu kapı kapanmalı.
@@ -412,10 +413,10 @@ kontrolü bunu yakalar.
 
 ## Bilinen eksikler
 
-- **PCB/Comm base-path — go-live kapısı.** Yukarıdaki "Yönlendirme"
-  bölümündeki iş listesi tamamlanmadan `/pcb` ve `/comm` gerçek trafikte
-  çalışmaz. `edge`in kendisi doğru kuruldu ve test edildi; eksik olan iki
-  ürünün KENDİ derlemesi.
+- **PCB base-path — go-live kapısının kalan yarısı.** Comm kapattı; PCB'nin
+  düzeltmesi `alp-pcb-toolkit` deposunda `fix/pcb-suit-base-path` dalında bekliyor
+  (`75626c1`). Dal `main`e alınmadan `/pcb` gerçek trafikte çalışmaz. `edge`in
+  kendisi doğru kuruldu ve test edildi.
 - **Migration açılışta uygulanır** (`Database__MigrateOnStartup=true`). Tek
   kopyalı dağıtımda doğru; api birden çok kopyaya çıkarsa kapatılıp ayrı bir
   migration adımına taşınır.

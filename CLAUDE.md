@@ -12,7 +12,9 @@ her ürün kendi deposunda kendi SPA'sını ve kendi imajını taşır:
 |---|---|---|
 | **alp-platform** (burası) | `api/` (ASP.NET Core 9), `deploy/`, `assets/`, `design/`, `landing/` | aktif |
 | **alp-pcb-toolkit** | PCB SPA'sı (`web/`, Vite + React 18, JS) | aktif |
-| **alp-comm-toolkit** | Comm SPA'sı (Vite + React 18, TS + Tailwind) | Faz 2'de doğacak |
+| **alp-comm-toolkit** | Comm SPA'sı (Vite + React 18, TS + Tailwind) | aktif |
+| **alp-aerospace** | SIM-IT Aerospace SPA'sı (İHA/roket) | **süite bağlanmadı** |
+| **alp-systemlab** | SIM-IT SystemLab SPA'sı (blok simülasyonu) | **süite bağlanmadı** |
 
 Autodesk modeli: tek hesap, tek alan adı, tek veritabanı, tek deploy — ürünler bağımsız
 depolarda, bağımsız sürümlerle. **Mikroservis değil, modüler monolit**: tek api servisi,
@@ -85,10 +87,11 @@ Path tabanlı, tek alan adı: `/` landing (statik, `landing/`), `/pcb`, `/comm`,
 PCB/Comm'un KENDİ ürettiği HTML'in de `/pcb/…`/`/comm/…` köklü varlık yolları taşıması şart —
 aksi hâlde `/assets/…` isteği edge'in KÖKÜNDE (landing'de) 404 alır.
 
-**Go-live kapısı, henüz kapanmadı.** PCB ve Comm hâlâ "ben sitenin köküyüm" varsayımıyla
-derleniyor (Vite `base`, `BrowserRouter basename`, PCB'nin PWA manifest yolları, PCB'nin kendi
-`nginx.conf`'undaki önek farkındalığı) — bunlar KENDİ depolarında değişmeden `/pcb` ve `/comm`
-gerçek trafikte boş/bozuk açılır. alp-platform tarafı (edge, compose, landing) kuruldu ve
+**Go-live kapısı, YARISI kapandı.** Comm tarafı tamam: `vite.config.ts` `base: '/comm/'`
+ve `BrowserRouter basename={import.meta.env.BASE_URL}`. PCB tarafının düzeltmesi YAZILDI ama
+BİRLEŞMEDİ — `alp-pcb-toolkit` deposunda `fix/pcb-suit-base-path` dalı (`75626c1`,
+`base: '/pcb/'`); `main` hâlâ `base: '/'` ile derliyor. O dal birleşmeden `/pcb` gerçek
+trafikte varlık 404'leriyle boş açılır. alp-platform tarafı (edge, compose, landing) kuruldu ve
 smoke-test edildi; tam liste ve hangi depoda ne değişmesi gerektiği `deploy/README.md` →
 "Yönlendirme" bölümünde. Sunucu henüz yok, o yüzden bugün canlı regresyon riski yok — ama ilk
 gerçek dağıtımdan önce bu liste kapanmalı.
@@ -159,12 +162,16 @@ altındaki ilgili anahtarın SPA'nın rota sözlüğüyle elle karşılaştırı
 
 ## Yol haritası
 
-Faz planı ve faz başına model/effort önerisi: `~/Desktop/commtoolkit/plan-fazlar.md`.
+Faz planı ve faz başına model/effort önerisi:
+`~/Desktop/alp-comm-toolkit/docs/plan-fazlar.md`.
+
+**Bu depodaki fazların hepsi bitti** (Faz 0–4, son commit 2026-08-10). Aşağıdaki tablo
+tarihçedir, yapılacak iş listesi değil.
 
 | Faz | İş | Depo |
 |---|---|---|
-| 0 | Platform ayrıştırma | burası + pcb |
-| 1 | `design/` — tasarım token'ları + `@alp/design` (ortak header, hesap menüsü, ürün değiştirici) | burası |
-| 2 | Comm SPA iskeleti | alp-comm-toolkit |
-| 3 | `Comm/` feature modülü + `comm` şeması + CORS + auth mail yollarının ürün başına taşınması | burası |
-| 4 | `landing/` + edge nginx path routing (`/pcb`, `/comm`) + compose süit düzeni + deploy runbook'unun yeniden yazımı | burası |
+| 0 ✅ | Platform ayrıştırma | burası + pcb |
+| 1 ✅ | `design/` — tasarım token'ları + `@mcanbektas/design` (ortak header, hesap menüsü, ürün değiştirici). **Scope `@alp/design` DEĞİL**: GitHub'da `alp` kullanıcı adı başkasına ait, Packages scope'u repo sahibiyle eşleşmek zorunda | burası |
+| 2 ✅ | Comm SPA iskeleti | alp-comm-toolkit |
+| 3 ✅ | `Comm/` feature modülü + `comm` şeması + CORS + auth mail yollarının ürün başına taşınması | burası |
+| 4 ✅ | `landing/` + edge nginx path routing (`/pcb`, `/comm`) + compose süit düzeni + deploy runbook'unun yeniden yazımı | burası |
