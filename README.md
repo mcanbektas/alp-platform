@@ -9,7 +9,7 @@ ALP ürün süitinin ortak sırtı: kimlik, veritabanı, rapor üretimi ve dağ�
 | **deploy** — Docker Compose (postgres + api + ürün SPA'ları + seq), nginx, certbot | bu depo, `deploy/` |
 | **PCB Toolkit** — PCB mühendislik hesap araçları (SPA) | [alp-pcb-toolkit](https://github.com/mcanbektas/alp-pcb-toolkit) |
 | **Comm Toolkit** — haberleşme protokolü analiz platformu (SPA) | [alp-comm-toolkit](https://github.com/mcanbektas/alp-comm-toolkit) |
-| **SIM-IT Aerospace** — İHA/roket tasarım ve uçuş verisi doğrulama (SPA) | alp-aerospace *(süite bağlanmadı — bkz. aşağıdaki not)* |
+| **SIM-IT Aerospace** — İHA/roket tasarım ve uçuş verisi doğrulama (SPA) | [alp-aerospace](https://github.com/mcanbektas/alp-aerospace) *(süite bağlanmadı — bkz. aşağıdaki not)* |
 | **SIM-IT SystemLab** — blok tabanlı sistem simülasyonu (SPA) | [alp-systemlab](https://github.com/mcanbektas/alp-systemlab) *(süite bağlanmadı)* |
 
 Tek hesap, tek alan adı, tek veritabanı, tek deploy; ürünler bağımsız depolarda ve bağımsız
