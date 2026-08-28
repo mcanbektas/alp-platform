@@ -87,14 +87,20 @@ Path tabanlı, tek alan adı: `/` landing (statik, `landing/`), `/pcb`, `/comm`,
 PCB/Comm'un KENDİ ürettiği HTML'in de `/pcb/…`/`/comm/…` köklü varlık yolları taşıması şart —
 aksi hâlde `/assets/…` isteği edge'in KÖKÜNDE (landing'de) 404 alır.
 
-**Go-live kapısı, YARISI kapandı.** Comm tarafı tamam: `vite.config.ts` `base: '/comm/'`
-ve `BrowserRouter basename={import.meta.env.BASE_URL}`. PCB tarafının düzeltmesi YAZILDI ama
-BİRLEŞMEDİ — `alp-pcb-toolkit` deposunda `fix/pcb-suit-base-path` dalı (`75626c1`,
-`base: '/pcb/'`); `main` hâlâ `base: '/'` ile derliyor. O dal birleşmeden `/pcb` gerçek
-trafikte varlık 404'leriyle boş açılır. alp-platform tarafı (edge, compose, landing) kuruldu ve
-smoke-test edildi; tam liste ve hangi depoda ne değişmesi gerektiği `deploy/README.md` →
-"Yönlendirme" bölümünde. Sunucu henüz yok, o yüzden bugün canlı regresyon riski yok — ama ilk
-gerçek dağıtımdan önce bu liste kapanmalı.
+**Go-live kapısı KAPANDI (2026-08-28).** Comm tarafı zaten tamamdı: `vite.config.ts`
+`base: '/comm/'` ve `BrowserRouter basename={import.meta.env.BASE_URL}`. PCB tarafında
+`fix/pcb-suit-base-path` (`75626c1`) `main`e birleştirildi ve dalın ATLADIĞI iki katman da
+kapatıldı (`22bd8e9`, `8d737ca`): prerender `StaticRouter`ı öneksiz koşuyor ve 112 sayfanın
+bağlantılarını `/arac/…` basıyordu; service worker precache'i `/spa-fallback.html` isteyip
+404 aldığı için hiç kurulmuyordu. Önek artık PCB'de de tek kaynakta (`vite.config.js` → `BASE`,
+yönlendirici `import.meta.env.BASE_URL`'den okur) — Comm ile aynı desen. Doğrulandı: 3133 birim,
+32 e2e, 5 PWA e2e yeşil ve derleme çıktısı `/pcb/` önekli.
+
+Kalan tek ayar canlı öncesi: `VITE_SITE_URL` süit önekini TAŞIMALI
+(`https://<alan>/pcb`), yoksa canonical/hreflang/sitemap kökü gösterir. Yeri:
+bu deponun `deploy/.env` ve PCB deposunun `SITE_URL` Actions değişkeni.
+alp-platform tarafı (edge, compose, landing) kurulu ve smoke-test edilmişti; tam liste
+`deploy/README.md` → "Yönlendirme" bölümünde.
 
 ### Kimlik
 
