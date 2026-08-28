@@ -163,7 +163,7 @@ altındaki ilgili anahtarın SPA'nın rota sözlüğüyle elle karşılaştırı
 ## Yol haritası
 
 Faz planı ve faz başına model/effort önerisi:
-`~/Desktop/alp-comm-toolkit/docs/plan-fazlar.md`.
+`~/dev/alp-comm-toolkit/docs/plan-fazlar.md`.
 
 **Bu depodaki fazların hepsi bitti** (Faz 0–4, son commit 2026-08-10). Aşağıdaki tablo
 tarihçedir, yapılacak iş listesi değil.
